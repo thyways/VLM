@@ -1,0 +1,12 @@
+transformers==4.51.1
+torch==2.6.0
+torchvision==0.21.0
+decord==0.6.0
+deepcodec==0.0.8
+torchcodec==0.2
+datasets
+accelerate
+numpy
+qwen-vl-utils[decord]
+av
+termcolor
