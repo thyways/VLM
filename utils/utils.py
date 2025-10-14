@@ -120,6 +120,16 @@ def load_data(task, data_num, data_path):
     return data_video
 
 def decode_video(processor, task, data_instance, frame_num=8, model_type='qwen2_5_vl', data_path=None):
+    def calculate_fps_for_target_frames(container, target_frames):
+            video_stream = container.streams.video[0]
+            duration = container.duration / 1000000
+            if duration <= 0:
+                return 1.0 
+            
+            required_fps = target_frames / duration
+            print(f"INFO: Duration: {duration:.2f}s, frame_num: {target_frames}, fps: {required_fps:.2f}")
+            return required_fps
+    
     if model_type == 'qwen2_5_vl':
         if task == "VideoDetailCaption":
             video_path = os.path.join(data_path, "Test_Videos/")
@@ -152,6 +162,7 @@ def decode_video(processor, task, data_instance, frame_num=8, model_type='qwen2_
         if total_frames == 0:
             return None
 
+        fps = calculate_fps_for_target_frames(container, frame_num)
         # messages = [
         #     {
         #         "role": "user",
@@ -160,7 +171,7 @@ def decode_video(processor, task, data_instance, frame_num=8, model_type='qwen2_
         #                 "type": "video",
         #                 "video": f"file://{video_path}",
         #                 "max_pixels": 448*448,  
-        #                 "fps": 1, 
+        #                 "fps": fps, 
         #             },
         #             {"type": "text", "text": question},
         #         ],
@@ -168,18 +179,18 @@ def decode_video(processor, task, data_instance, frame_num=8, model_type='qwen2_
         # ]
 
         messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "video",
-                    "video":"/home/wmk/code/1408717315-1-192.mp4",
-                    "fps": 1,
-                },
-                {"type": "text", "text": "Describe what happen in the video?"},
-            ],
-        }
-    ]
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "video",
+                        "video":"/home/wmk/code/VLM/data/1408717315-1-192.mp4",
+                        "fps": fps,
+                    },
+                    {"type": "text", "text": "Describe what happen in the video?"},
+                ],
+            }
+        ]
         
         text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True)
@@ -256,7 +267,7 @@ def video_chunk_prefill(whole_inputs, video_inputs, model, kvcache, video_group_
         group_i_inputs = group_i_inputs.to(model.device)
         group_i_inputs['use_cache'] = True
         with torch.no_grad():
-            outputs = model(**group_i_inputs)
+            outputs = model(**group_i_inputs,)
     assert past_len < whole_inputs['input_ids'].shape[1], "The past length should be less than the final input length."   
     final_inputs = {
         "input_ids": whole_inputs['input_ids'][:, past_len:],
@@ -266,7 +277,7 @@ def video_chunk_prefill(whole_inputs, video_inputs, model, kvcache, video_group_
     final_inputs['past_key_values'] = past_key_values
     final_inputs['use_cache'] = True
 
-    output = model( **final_inputs, sparse_cache=sparse_cache)
+    output = model( **final_inputs, output_attentions=True, sparse_cache=sparse_cache)
     return output
 
 def convert_attention_to_score(attentions, input_ids, visual_token_id=151646, idx=None):

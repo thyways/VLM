@@ -238,14 +238,10 @@ def sparse_speculative_decoding(
         target_model.model.past_key_values = past_key_values
         target_model.model.past_key_values_data = past_key_values_data
         target_model.model.current_length_data = current_length_data
-        
-        # (
-        #         retrieval_past_key_values,
-        #         retrieval_past_key_values_data,
-        #         retrieval_current_length_data,
-        # ) = initialize_past_key_values(target_model)
 
         retrieval_past_key_values = None
+        retrieval_past_key_data = None
+        retrieval_current_length_data = None
 
         (
                 draft_past_key_values,
@@ -537,22 +533,23 @@ def initialize_tree_with_pruning(inputs, video_inputs, target_model, draft_model
                                  video_token_id=151656, drop_rate=None, idx=None, inputs_drop=None, temperature=0.6, top_k=-1, top_p=0.9):
     output = video_chunk_prefill(inputs, video_inputs, target_model, past_key_values, video_group_size, sparse_cache = True)
     logits = output.logits
+    attentions = output.attentions
 
     sample_token = sample(norm_logits(logits[:,-1,:], temperature=temperature ,top_k=top_k, top_p=top_p))
     #Prefill of Draft Model
-    # scores = None
-    # inputs_drop = drop_visual_tokens(attentions, inputs, drop_rate=drop_rate,
-    #                                 visual_token_id=video_token_id, reverse=True, idx=idx,)
+    scores = None
+    inputs_drop = drop_visual_tokens(attentions, inputs, drop_rate=drop_rate,
+                                    visual_token_id=video_token_id, reverse=True, idx=idx,)
 
-    # draft_input_len = inputs_drop['input_ids'].shape[1]
+    draft_input_len = inputs_drop['input_ids'].shape[1]
 
     #Prefill of Draft Model
-    # output_draft = draft_model(
-    #     **inputs_drop, past_key_values=draft_past_key_values
-    # )
-    draft_output = video_chunk_prefill(inputs, video_inputs, draft_model, draft_past_key_values, video_group_size)
+    output_draft = draft_model(
+        **inputs_drop, past_key_values=draft_past_key_values
+    )
+    #draft_output = video_chunk_prefill(inputs, video_inputs, draft_model, draft_past_key_values, video_group_size)
 
-    return sample_token,
+    return sample_token, draft_input_len, scores
 
 @torch.no_grad()
 def tree_draft(input_ids, draft_model, draft_past_key_values,len_posi):
