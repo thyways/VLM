@@ -76,16 +76,16 @@ if __name__ == "__main__":
         if inputs == None:
             continue
 
-        # output_ar = Autoregressive(inputs, video_inputs, target_model ,max_new_tokens=max_new_tokens, top_k=top_k, top_p=top_p, temperature=temperature)
-        # print("\n")
-        # print("-------Autoregressive Decoding-------")
-        # #print("Inference Time:", output_ar['inference_time'])
-        # print("Decoding Time:", output_ar['decoding_time'])
-        # output_text = processor.batch_decode(output_ar['output_ids'], skip_special_tokens=True)[0]
-        # print("Output:")
-        # print(output_text)
-        # print("\n")
-        # results['Autoregressive_decoding'].append(output_ar['decoding_time'])
+        output_ar = Autoregressive(inputs, video_inputs, target_model ,max_new_tokens=max_new_tokens, top_k=top_k, top_p=top_p, temperature=temperature)
+        print("\n")
+        print("-------Autoregressive Decoding-------")
+        #print("Inference Time:", output_ar['inference_time'])
+        print("Decoding Time:", output_ar['decoding_time'])
+        output_text = processor.batch_decode(output_ar['output_ids'], skip_special_tokens=True)[0]
+        print("Output:")
+        print(output_text)
+        print("\n")
+        results['Autoregressive_decoding'].append(output_ar['decoding_time'])
 
         # output_sd = speculative_decoding(
         #         inputs,
@@ -111,26 +111,26 @@ if __name__ == "__main__":
         # results['speculative_decoding'].append(output_sd['decoding_time'])
         # results['speculative_decoding_accept_length'].append(output_sd["mean_accept_length"])
 
-        output_specvlm = sparse_speculative_decoding(
-            inputs,
-            video_inputs,
-            target_model,
-            draft_model,
-            processor,
-            max_new_tokens=max_new_tokens,
-            tree_choices=mc_sim_7b_63,
-        )
-        print("\n")
-        print("-------TriVLM-------")
-        # print("Inference Time:", output_specvlm['inference_time'])
-        print("Decoding Time:", output_specvlm['decoding_time'])
-        print("Average Accept Length:", output_specvlm["mean_accept_length"].item())
-        output_text = processor.batch_decode(output_specvlm['output_ids'], skip_special_tokens=True)[0]
-        print("Output:")
-        print(output_text)
-        print("\n")
-        results['TriVLM_decode'].append(output_specvlm['decoding_time'])
-        results['TriVLM_accept_length'].append(output_specvlm["mean_accept_length"])
+        # output_specvlm = sparse_speculative_decoding(
+        #     inputs,
+        #     video_inputs,
+        #     target_model,
+        #     draft_model,
+        #     processor,
+        #     max_new_tokens=max_new_tokens,
+        #     tree_choices=mc_sim_7b_63,
+        # )
+        # print("\n")
+        # print("-------TriVLM-------")
+        # # print("Inference Time:", output_specvlm['inference_time'])
+        # print("Decoding Time:", output_specvlm['decoding_time'])
+        # print("Average Accept Length:", output_specvlm["mean_accept_length"].item())
+        # output_text = processor.batch_decode(output_specvlm['output_ids'], skip_special_tokens=True)[0]
+        # print("Output:")
+        # print(output_text)
+        # print("\n")
+        # results['TriVLM_decode'].append(output_specvlm['decoding_time'])
+        # results['TriVLM_accept_length'].append(output_specvlm["mean_accept_length"])
 
         # if save_path is not None:
         #     print("\n")
