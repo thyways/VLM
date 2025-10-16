@@ -1,9 +1,8 @@
-# copy from https://github.com/Zefan-Cai/R-KV/blob/main/HuggingFace/rkv/compression/h2o.py
 import torch
 import torch.nn as nn
 import math
 
-class DraftCache:
+class H2OCache:
     """
     A key-value cache for the model.
 
@@ -79,19 +78,21 @@ class DraftCache:
         return torch.narrow(self.data, 2, 0, self.current_length)
 
 
-    def update_kv(
+    def update_H2O_kv(
         self,
         key_states,
         query_states,
         value_states,
     ):
+
         head_dim = query_states.shape[-1]
         kv_cache_len = key_states.shape[-2]
+        num_kv_heads = key_states.shape[1]
 
         if kv_cache_len < self.budget:
             return key_states, value_states
         else:
-            query_states = query_states[:, :, -1:, :]
+            #query_states = query_states[:, :, -1:, :]
             attn_weights = compute_attention_scores(query_states, key_states).squeeze(2)
 
             attn_weights_sum = (
@@ -109,9 +110,6 @@ class DraftCache:
                 self.budget - self.window_size, dim=-1
             ).indices
 
-            #####################################################
-            ###### Store evicted token indices start ############
-            #####################################################
             # shape: (num_kv_heads, budget - window_size)
             if self.record_kept_token_indices:
                 indices_cl = indices.clone().squeeze(0).to("cpu")
@@ -137,9 +135,8 @@ class DraftCache:
 
                 self.kept_token_indices.append(cur_indices)
                 self.evicted_token_num += kv_cache_len - self.budget
-            ######################################################
 
-            indices = indices.unsqueeze(-1).expand(-1, -1, -1, head_dim)
+            indices = indices.unsqueeze(1).unsqueeze(-1).expand(-1, num_kv_heads, -1, head_dim)
 
             k_past_compress = key_states[:, :, : -self.window_size, :].gather(
                 dim=2, index=indices
@@ -152,41 +149,6 @@ class DraftCache:
             key_states = torch.cat([k_past_compress, k_cur], dim=2)
             value_states = torch.cat([v_past_compress, v_cur], dim=2)
             return key_states, value_states
-
-
-        
-def compute_attention_scores(query_states, key_states, pooling="max"):
-    batch_size, q_heads, q_len, head_dim = query_states.shape
-    kv_heads = key_states.shape[1]
-    query_group_size = q_heads // kv_heads
-
-    if query_group_size == 1:
-        attn_weights = torch.matmul(
-            query_states, key_states.transpose(2, 3)
-        ) / math.sqrt(head_dim)
-    else:
-        # shape: [batch_size, kv_heads, query_group_size, q_len, head_dim]
-        query_states = query_states.view(
-            batch_size, kv_heads, query_group_size, q_len, head_dim
-        )
-
-        # shape: [batch_size, kv_heads, 1, kv_len, head_dim]
-        key_states = key_states.unsqueeze(2)
-
-        # shape: [batch_size, kv_heads, query_group_size, q_len, kv_len]
-        attn_weights = torch.matmul(
-            query_states, key_states.transpose(3, 4)
-        ) / math.sqrt(head_dim)
-
-        # apply pooling over query_group_size dimension
-        if pooling == "mean":
-            attn_weights = attn_weights.mean(dim=2)
-        elif pooling == "max":
-            attn_weights = attn_weights.max(dim=2).values
-        else:
-            raise ValueError("Pooling method not supported")
-
-    return attn_weights
 
 def initialize_past_key_values_draft(model):
     """
@@ -266,14 +228,14 @@ def initialize_past_key_values_draft(model):
         try:
             past_key_values.append(
                 [
-                    DraftCache(past_key_values_data_list[data_m-devices[0].index][2*bias + j], current_length_data[i * 2 + j])
+                    H2OCache(past_key_values_data_list[data_m-devices[0].index][2*bias + j], current_length_data[i * 2 + j])
                     for j in range(2)
                 ]
             )
         except:
             past_key_values.append(
                 [
-                    DraftCache(past_key_values_data_list[0][2 * bias + j],
+                    H2OCache(past_key_values_data_list[0][2 * bias + j],
                             current_length_data[i * 2 + j])
                     for j in range(2)
                 ]
@@ -291,4 +253,36 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
         return hidden_states
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
-   
+
+def compute_attention_scores(query_states, key_states, pooling="max"):
+    batch_size, q_heads, q_len, head_dim = query_states.shape
+    kv_heads = key_states.shape[1]
+    query_group_size = q_heads // kv_heads
+
+    if query_group_size == 1:
+        attn_weights = torch.matmul(
+            query_states, key_states.transpose(2, 3)
+        ) / math.sqrt(head_dim)
+    else:
+        # shape: [batch_size, kv_heads, query_group_size, q_len, head_dim]
+        query_states = query_states.view(
+            batch_size, kv_heads, query_group_size, q_len, head_dim
+        )
+
+        # shape: [batch_size, kv_heads, 1, kv_len, head_dim]
+        key_states = key_states.unsqueeze(2)
+
+        # shape: [batch_size, kv_heads, query_group_size, q_len, kv_len]
+        attn_weights = torch.matmul(
+            query_states, key_states.transpose(3, 4)
+        ) / math.sqrt(head_dim)
+
+        # apply pooling over query_group_size dimension
+        if pooling == "mean":
+            attn_weights = attn_weights.mean(dim=2)
+        elif pooling == "max":
+            attn_weights = attn_weights.max(dim=2).values
+        else:
+            raise ValueError("Pooling method not supported")
+
+    return attn_weights

@@ -36,7 +36,8 @@ from torch.nn import CrossEntropyLoss
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache, SlidingWindowCache, StaticCache
 from cache.kv_cache import FlashSimpleCache
-from cache.draft_cache import DraftCache
+from cache.sparse_cache import RetrievalCache
+from cache.draft_cache import H2OCache
 from transformers.generation import GenerationMixin
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 from transformers.modeling_flash_attention_utils import flash_attn_supports_top_left_mask, is_flash_attn_available
@@ -46,6 +47,7 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
 from .configuration_qwen2_5_vl import Qwen2_5_VLConfig, Qwen2_5_VLVisionConfig
 
+from flash_attn import flash_attn_with_kvcache
 
 if is_flash_attn_available():
     from transformers.modeling_flash_attention_utils import apply_rotary_emb, flash_attn_varlen_func
@@ -917,25 +919,32 @@ class Qwen2_5_VLFlashAttention2(Qwen2_5_VLAttention):
         key_states = key_states.transpose(1, 2)
         value_states = value_states.transpose(1, 2)
 
-        if (
-            self.config.use_sliding_window
-            and getattr(self.config, "sliding_window", None) is not None
-            and self.layer_idx >= self.config.max_window_layers
-        ):
-            sliding_window = self.config.sliding_window
-        else:
-            sliding_window = None
+        # if (
+        #     self.config.use_sliding_window
+        #     and getattr(self.config, "sliding_window", None) is not None
+        #     and self.layer_idx >= self.config.max_window_layers
+        # ):
+        #     sliding_window = self.config.sliding_window
+        # else:
+        #     sliding_window = None
 
-        attn_output = _flash_attention_forward(
-            query_states,
-            key_states,
-            value_states,
-            attention_mask,
-            q_len,
-            dropout=dropout_rate,
-            sliding_window=sliding_window,
-            is_causal=self.is_causal,
-            use_top_left_mask=self._flash_attn_uses_top_left_mask,
+        # attn_output = _flash_attention_forward(
+        #     query_states,
+        #     key_states,
+        #     value_states,
+        #     attention_mask,
+        #     q_len,
+        #     dropout=dropout_rate,
+        #     sliding_window=sliding_window,
+        #     is_causal=self.is_causal,
+        #     use_top_left_mask=self._flash_attn_uses_top_left_mask,
+        # )
+        attn_output = flash_attn_with_kvcache(
+            q=query_states, 
+            k_cache=key_states, 
+            v_cache=value_states, 
+            softmax_scale=1/torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float16)), 
+            causal=True
         )
 
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
@@ -945,37 +954,6 @@ class Qwen2_5_VLFlashAttention2(Qwen2_5_VLAttention):
             attn_weights = None
 
         return attn_output, attn_weights, past_key_value
-
-def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
-        is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
-    L, S = query.size(-2), key.size(-2)
-    scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
-    attn_bias = torch.zeros(1,1,L, S, dtype=query.dtype).to(query.device) #MODIFIED
-    if is_causal:
-        assert attn_mask is None
-        temp_mask = torch.ones(L, S, dtype=torch.bool).tril(diagonal=0)
-        attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
-        attn_bias.to(query.dtype)
-
-    if attn_mask is not None:
-        if attn_mask.dtype == torch.bool:
-            attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
-        else:
-            attn_bias += attn_mask.to(attn_bias.device) #MODIFIED
-
-    if enable_gqa:
-        key = key.repeat_interleave(query.size(-3)//key.size(-3), -3)
-        value = value.repeat_interleave(query.size(-3)//value.size(-3), -3)
-
-    query = query.to(dtype=torch.bfloat16) #MODIFIED
-    key = key.to(dtype=torch.bfloat16)
-
-    attn_weight = (query @ key.transpose(-2, -1) * scale_factor).to(torch.float16)
-    attn_weight += attn_bias
-    attn_weight = torch.softmax(attn_weight, dim=-1)
-    attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
-
-    return attn_weight @ value, attn_weight
 
 class Qwen2_5_VLSdpaAttention(Qwen2_5_VLAttention):
     """
@@ -1014,7 +992,12 @@ class Qwen2_5_VLSdpaAttention(Qwen2_5_VLAttention):
 
         key_states = past_key_value[0].cat(key_states, dim=2)
         value_states = past_key_value[1].cat(value_states, dim=2)
-        
+
+        if query_states.shape[2]==1 and isinstance(past_key_value[0],H2OCache):
+            key_states, value_states = past_key_value[0].update_H2O_kv(key_states, query_states, value_states)
+            past_key_value[0] = key_states
+            past_key_value[1] = value_states
+
         past_key_value = None
 
         key_states = repeat_kv(key_states, self.num_key_value_groups)
@@ -1024,8 +1007,6 @@ class Qwen2_5_VLSdpaAttention(Qwen2_5_VLAttention):
         if attention_mask is not None:  # no matter the length, we just slice it
             causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
 
-        # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
-        # Reference: https://github.com/pytorch/pytorch/issues/112577.
         if query_states.device.type == "cuda" and attention_mask is not None:
             query_states = query_states.contiguous()
             key_states = key_states.contiguous()
@@ -1036,25 +1017,15 @@ class Qwen2_5_VLSdpaAttention(Qwen2_5_VLAttention):
         # The q_len > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not create a causal mask in case q_len == 1.
         is_causal = True if causal_mask is None and q_len > 1 else False
 
-        if output_attentions:
-            attn_output, attn_weight = scaled_dot_product_attention(
-                query_states,
-                key_states,
-                value_states,
-                attn_mask=causal_mask,
-                dropout_p=self.attention_dropout if self.training else 0.0,
-                is_causal=is_causal,
-            )
-        else:
-            attn_output = torch.nn.functional.scaled_dot_product_attention(
-                query_states,
-                key_states,
-                value_states,
-                attn_mask=causal_mask,
-                dropout_p=self.attention_dropout if self.training else 0.0,
-                is_causal=is_causal,
-            )
-            attn_weight = None
+        attn_output = torch.nn.functional.scaled_dot_product_attention(
+            query_states,
+            key_states,
+            value_states,
+            attn_mask=causal_mask,
+            dropout_p=self.attention_dropout if self.training else 0.0,
+            is_causal=is_causal,
+        )
+        attn_weight = None
 
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(bsz, q_len, self.hidden_size)

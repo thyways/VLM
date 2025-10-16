@@ -23,7 +23,7 @@ def parse_arguments():
     parser.add_argument('--save_path', type=str, default=None, help='Path to save results.')
 
     parser.add_argument('--temp', type=float, default=0.01, help='temperature')
-    parser.add_argument('--top_p', type=float, default=0.9, help='top p')
+    parser.add_argument('--top_p', type=float, default=1, help='top p')
     parser.add_argument('--max_new_tokens', type=int, default=256, help='Maximum number of new tokens to generate')
 
     parser.add_argument('--gpu_ids', type=str, default="0,1,2,3", help='GPU IDs to use')

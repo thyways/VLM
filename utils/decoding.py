@@ -15,9 +15,6 @@ from utils.sampling import sample, norm_logits
 from utils.choices import mc_sim_7b_63
 from utils.utils import *
 
-import seaborn as sns
-
-
 TOPK = 6
 video_group_size = 32
 
@@ -30,7 +27,7 @@ def Autoregressive(inputs, video_inputs, target_model, max_new_tokens=128, top_k
         past_key_values,
         past_key_values_data,
         current_length_data,
-    ) = initialize_past_key_values(target_model)
+    ) = initialize_past_key_values_draft(target_model)
     target_model.model.past_key_values = past_key_values
     target_model.model.past_key_values_data = past_key_values_data
     target_model.model.current_length_data = current_length_data
@@ -41,11 +38,14 @@ def Autoregressive(inputs, video_inputs, target_model, max_new_tokens=128, top_k
     batch_size = input_ids.shape[0]
     
     with torch.no_grad():
-        output = video_chunk_prefill(inputs, video_inputs, target_model, past_key_values, video_group_size)
+        output = video_chunk_prefill(inputs, video_inputs, target_model, past_key_values, video_group_size, sparse_cache = True)
         logits = output.logits
         attentions = output.attentions
-
-        next_token = sample(norm_logits(logits[:,-1,:], temperature=temperature ,top_k=top_k, top_p=top_p))
+        if temperature==0:
+            next_token = torch.argmax(logits[:, -1])
+            next_token = next_token[None, None]
+        else:
+            next_token = sample(norm_logits(logits[:,-1,:], temperature=temperature ,top_k=top_k, top_p=top_p))
 
         generated = torch.cat([inputs['input_ids'], next_token], dim=1)
 
@@ -59,12 +59,15 @@ def Autoregressive(inputs, video_inputs, target_model, max_new_tokens=128, top_k
             }
             outputs = target_model(**new_inputs)
 
-            next_token = sample(norm_logits(outputs.logits, temperature=temperature ,top_k=top_k, top_p=top_p))
+            if temperature==0:
+                next_token = torch.argmax(outputs.logits[:, -1:], dim=-1)
+            else:
+                next_token = sample(norm_logits(outputs.logits, temperature=temperature ,top_k=top_k, top_p=top_p))
             generated = torch.cat([generated, next_token], dim=-1)
 
         torch.cuda.synchronize()
         time3 = time.time()
-        
+
         return {
         'output_ids':generated,
         'inference_time':time3 - time1,
@@ -255,7 +258,7 @@ def sparse_speculative_decoding(
         reset_tree_mode(draft_model)
 
         scores = None
-        sample_token, draft_input_len, scores = initialize_tree_with_pruning(
+        sample_token, draft_input_len, scores = initialize_tree_with_TriVLM(
             inputs, video_inputs, target_model, draft_model, past_key_values, retrieval_past_key_values, draft_past_key_values,
             video_token_id, drop_rate, idx=idx, inputs_drop=inputs_drop,
         )
@@ -523,19 +526,24 @@ def initialize_tree(inputs,video_inputs, target_model, draft_model, past_key_val
                      temperature=0.6, top_k=-1, top_p=0.9):
     output = video_chunk_prefill(inputs, video_inputs, target_model, past_key_values, video_group_size)
     logits = output.logits
-    # sample_token = torch.argmax(logits[:, -1])
-    # sample_token = sample_token[None, None]
-    sample_token = sample(norm_logits(logits[:,-1,:], temperature=temperature ,top_k=top_k, top_p=top_p))
+    if temperature==0:
+        sample_token = torch.argmax(logits[:, -1])
+        sample_token = sample_token[None, None]
+    else:
+        sample_token = sample(norm_logits(logits[:,-1,:], temperature=temperature ,top_k=top_k, top_p=top_p))
     output_draft = video_chunk_prefill(inputs, video_inputs, draft_model, draft_past_key_values, video_group_size)
     return sample_token
 
-def initialize_tree_with_pruning(inputs, video_inputs, target_model, draft_model, past_key_values, retrieval_past_key_values, draft_past_key_values,
+def initialize_tree_with_TriVLM(inputs, video_inputs, target_model, draft_model, past_key_values, retrieval_past_key_values, draft_past_key_values,
                                  video_token_id=151656, drop_rate=None, idx=None, inputs_drop=None, temperature=0.6, top_k=-1, top_p=0.9):
     output = video_chunk_prefill(inputs, video_inputs, target_model, past_key_values, video_group_size, sparse_cache = True)
     logits = output.logits
     attentions = output.attentions
-
-    sample_token = sample(norm_logits(logits[:,-1,:], temperature=temperature ,top_k=top_k, top_p=top_p))
+    if temperature==0:
+        sample_token = torch.argmax(logits[:, -1])
+        sample_token = sample_token[None, None]
+    else:
+        sample_token = sample(norm_logits(logits[:,-1,:], temperature=temperature ,top_k=top_k, top_p=top_p))
     #Prefill of Draft Model
     scores = None
     inputs_drop = drop_visual_tokens(attentions, inputs, drop_rate=drop_rate,
@@ -624,12 +632,14 @@ def evaluate_posterior(
 ):
     # Greedy decoding based on temperature value
     # Find the tokens that match the maximum logits for each position in the sequence
-    # posterior_mask = (
-    #         candidates[:, 1:].to(logits.device) == torch.argmax(logits[:, :-1], dim=-1)
-    # ).int()
-    posterior_mask = (
-        candidates[:, 1:].to(logits.device) == sample(norm_logits(logits[:, :-1] , temperature=temperature ,top_k=top_k, top_p=top_p))
-    ).int()
+    if temperature==0:
+        posterior_mask = (
+                candidates[:, 1:].to(logits.device) == torch.argmax(logits[:, :-1], dim=-1)
+        ).int()
+    else:
+        posterior_mask = (
+            candidates[:, 1:].to(logits.device) == sample(norm_logits(logits[:, :-1] , temperature=temperature ,top_k=top_k, top_p=top_p))
+        ).int()
     candidates_accept_length = (torch.cumprod(posterior_mask, dim=1)).sum(dim=1)
     accept_length = candidates_accept_length.max()
     # Choose the best candidate
@@ -693,9 +703,11 @@ def update_inference_inputs(
     draft_current_length_data.fill_(prev_input_len)
 
     prob = sample_p.unsqueeze(0)
-    # token = torch.argmax(prob)
-    # token = token[None, None]
-    token = sample(norm_logits(prob, temperature=temperature ,top_k=top_k, top_p=top_p))
+    if temperature==0:
+        token = torch.argmax(prob)
+        token = token[None, None]
+    else:
+        token = sample(norm_logits(prob, temperature=temperature ,top_k=top_k, top_p=top_p))
     
     len_posi = input_ids.shape[1] + 1
     tree_logits = tree_draft(input_ids=torch.cat([candidates[None, best_candidate, : accept_length + 1], token],dim=-1),
@@ -760,9 +772,11 @@ def update_inference_inputs_with_pruning(
     draft_input_len += accept_length + 1
 
     prob = sample_p
-    # token = torch.argmax(prob)
-    # token = token[None, None]
-    token = sample(norm_logits(prob.unsqueeze(0), temperature ,top_k, top_p))
+    if temperature==0:
+        token = torch.argmax(prob)
+        token = token[None, None]
+    else:
+        token = sample(norm_logits(prob.unsqueeze(0), temperature ,top_k, top_p))
     len_posi = draft_input_len + 1
     # len_posi = input_ids.shape[1] + 1
     tree_logits = tree_draft(input_ids=torch.cat([candidates[None, best_candidate, : accept_length + 1], token],dim=-1),

@@ -30,14 +30,14 @@ def load_model(model_type, target_model_path, draft_model_path):
             device_map="auto", 
             low_cpu_mem_usage=True,
             torch_dtype=torch.float16,
-            attn_implementation = "sdpa",
+            #attn_implementation = "flash_attention_2",
         )
         draft_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             draft_model_path, 
             device_map="auto", 
             low_cpu_mem_usage=True,
             torch_dtype=torch.float16,
-            attn_implementation = "sdpa",
+            #attn_implementation = "flash_attention_2",
         )
     else:
         print("Not supported model type.")
@@ -163,34 +163,34 @@ def decode_video(processor, task, data_instance, frame_num=8, model_type='qwen2_
             return None
 
         fps = calculate_fps_for_target_frames(container, frame_num)
-        # messages = [
-        #     {
-        #         "role": "user",
-        #         "content": [
-        #             {
-        #                 "type": "video",
-        #                 "video": f"file://{video_path}",
-        #                 "max_pixels": 448*448,  
-        #                 "fps": fps, 
-        #             },
-        #             {"type": "text", "text": question},
-        #         ],
-        #     }
-        # ]
-
         messages = [
             {
                 "role": "user",
                 "content": [
                     {
                         "type": "video",
-                        "video":"/home/wmk/code/VLM/data/1408717315-1-192.mp4",
-                        "fps": fps,
+                        "video": f"file://{video_path}",
+                        "max_pixels": 448*448,  
+                        "fps": fps, 
                     },
-                    {"type": "text", "text": "Describe what happen in the video?"},
+                    {"type": "text", "text": question},
                 ],
             }
         ]
+
+        # messages = [
+        #     {
+        #         "role": "user",
+        #         "content": [
+        #             {
+        #                 "type": "video",
+        #                 "video":"/home/wmk/code/VLM/data/1408717315-1-192.mp4",
+        #                 "fps": fps,
+        #             },
+        #             {"type": "text", "text": "Describe what happen in the video?"},
+        #         ],
+        #     }
+        # ]
         
         text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True)
@@ -277,7 +277,7 @@ def video_chunk_prefill(whole_inputs, video_inputs, model, kvcache, video_group_
     final_inputs['past_key_values'] = past_key_values
     final_inputs['use_cache'] = True
 
-    output = model( **final_inputs, output_attentions=True, sparse_cache=sparse_cache)
+    output = model( **final_inputs, sparse_cache=sparse_cache)
     return output
 
 def convert_attention_to_score(attentions, input_ids, visual_token_id=151646, idx=None):
