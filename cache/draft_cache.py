@@ -1,8 +1,9 @@
 import torch
 import torch.nn as nn
 import math
+import torch.nn.functional as F
 
-class H2OCache:
+class DraftCache:
     """
     A key-value cache for the model.
 
@@ -15,7 +16,7 @@ class H2OCache:
         current_length (int): Current length of the data being stored.
     """
 
-    def __init__(self, data, current_length, budget=512, window_size=16, record_kept_token_indices=False,):
+    def __init__(self, data, current_length, budget=1024, window_size=16, kernel_size=7, record_kept_token_indices=False,):
         """
         Initialize the KVCache.
 
@@ -25,7 +26,8 @@ class H2OCache:
         """
         assert budget - window_size > 0, "budget must be greater than window_size"
         self.budget = budget
-        self.window_size = 1
+        self.window_size = window_size
+        self.kernel_size = kernel_size
 
         self.data = data
         self.current_length = current_length
@@ -83,7 +85,7 @@ class H2OCache:
         self.data.narrow(2, tensor.shape[dim], self.current_length).zero_()
         self.current_length.fill_(tensor.shape[dim])
 
-    def update_H2O_kv(
+    def update_draft_kv(
         self,
         key_states,
         query_states,
@@ -97,49 +99,27 @@ class H2OCache:
         if kv_cache_len < self.budget:
             return key_states, value_states
         else:
-            #query_states = query_states[:, :, -1:, :]
-            attn_weights = compute_attention_scores(query_states, key_states).squeeze(2)
+            attn_weights = compute_attention_scores(query_states, key_states)
 
             attn_weights_sum = (
                 nn.functional.softmax(
-                    attn_weights[:, :, : -self.window_size],
+                    attn_weights[:, :, -self.window_size :, : -self.window_size],
                     dim=-1,
                     dtype=torch.float32,
                 )
-                #.mean(dim=-2)
+                .mean(dim=-2)
                 .to(query_states.dtype)
             )
 
+            attn_cache = F.max_pool1d(
+                attn_weights_sum,
+                kernel_size=self.kernel_size,
+                padding=self.kernel_size // 2,
+                stride=1,
+            )
+
             # shape: (bsz, num_kv_heads, budget - window_size)
-            indices = attn_weights_sum.topk(
-                self.budget - self.window_size, dim=-1
-            ).indices
-
-            # shape: (num_kv_heads, budget - window_size)
-            if self.record_kept_token_indices:
-                indices_cl = indices.clone().squeeze(0).to("cpu")
-                recent_window_indices = torch.arange(
-                    kv_cache_len - self.window_size, kv_cache_len, device="cpu"
-                ).expand(indices_cl.shape[0], -1)
-                cur_indices = torch.cat([indices_cl, recent_window_indices], dim=-1)
-
-                if self.evicted_token_num > 0:
-                    prev_indices = self.kept_token_indices[-1]
-                    mask = cur_indices < self.budget
-
-                    for i in range(cur_indices.shape[0]):
-                        positions = torch.where(mask[i])[0]
-
-                        # For each position, get the value and use it as an index into prev_indices
-                        for pos in positions:
-                            val = cur_indices[i, pos].item()
-                            cur_indices[i, pos] = prev_indices[i, val]
-
-                    # For values >= self.budget, add the evicted token count
-                    cur_indices[~mask] += self.evicted_token_num
-
-                self.kept_token_indices.append(cur_indices)
-                self.evicted_token_num += kv_cache_len - self.budget
+            indices = attn_cache.topk(self.budget - self.window_size, dim=-1).indices
 
             indices = indices.unsqueeze(-1).expand(-1, -1, -1, head_dim)
 
@@ -234,14 +214,14 @@ def initialize_past_key_values_draft(model):
         try:
             past_key_values.append(
                 [
-                    H2OCache(past_key_values_data_list[data_m-devices[0].index][2*bias + j], current_length_data[i * 2 + j])
+                    DraftCache(past_key_values_data_list[data_m-devices[0].index][2*bias + j], current_length_data[i * 2 + j])
                     for j in range(2)
                 ]
             )
         except:
             past_key_values.append(
                 [
-                    H2OCache(past_key_values_data_list[0][2 * bias + j],
+                    DraftCache(past_key_values_data_list[0][2 * bias + j],
                             current_length_data[i * 2 + j])
                     for j in range(2)
                 ]

@@ -37,7 +37,7 @@ from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache, SlidingWindowCache, StaticCache
 from cache.kv_cache import FlashSimpleCache
 from cache.sparse_cache import RetrievalCache
-from cache.draft_cache import H2OCache
+from cache.draft_cache import DraftCache
 from transformers.generation import GenerationMixin
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 from transformers.modeling_flash_attention_utils import flash_attn_supports_top_left_mask, is_flash_attn_available
@@ -973,6 +973,7 @@ class Qwen2_5_VLSdpaAttention(Qwen2_5_VLAttention):
         use_cache: bool = False,
         cache_position: Optional[torch.LongTensor] = None,
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        sparse_cache: Optional[bool] = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
 
         bsz, q_len, _ = hidden_states.size()
@@ -993,8 +994,8 @@ class Qwen2_5_VLSdpaAttention(Qwen2_5_VLAttention):
         key_states = past_key_value[0].cat(key_states, dim=2)
         value_states = past_key_value[1].cat(value_states, dim=2)
 
-        if query_states.shape[2]==1 and isinstance(past_key_value[0],H2OCache):
-            key_states, value_states = past_key_value[0].update_H2O_kv(key_states, query_states, value_states)
+        if sparse_cache and isinstance(past_key_value[0],DraftCache) :
+            key_states, value_states = past_key_value[0].update_draft_kv(key_states, query_states, value_states)
             past_key_value[0].update(key_states, dim=2)
             past_key_value[1].update(value_states, dim=2)
 
@@ -1069,6 +1070,7 @@ class Qwen2_5_VLDecoderLayer(nn.Module):
         use_cache: Optional[bool] = False,
         cache_position: Optional[torch.LongTensor] = None,
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
+        sparse_cache: Optional[bool] = False,
         **kwargs,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """
@@ -1107,6 +1109,7 @@ class Qwen2_5_VLDecoderLayer(nn.Module):
             use_cache=use_cache,
             cache_position=cache_position,
             position_embeddings=position_embeddings,
+            sparse_cache=sparse_cache,
         )
         hidden_states = residual + hidden_states
 
@@ -1308,6 +1311,7 @@ class Qwen2_5_VLModel(Qwen2_5_VLPreTrainedModel):
                     output_attentions=output_attentions,
                     use_cache=use_cache,
                     position_embeddings=position_embeddings,
+                    sparse_cache = sparse_cache,
                 )
 
             hidden_states = layer_outputs[0]
