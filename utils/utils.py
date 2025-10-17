@@ -269,15 +269,25 @@ def video_chunk_prefill(whole_inputs, video_inputs, model, kvcache, video_group_
         with torch.no_grad():
             outputs = model(**group_i_inputs,)
     assert past_len < whole_inputs['input_ids'].shape[1], "The past length should be less than the final input length."   
+    other_inputs = {
+        "input_ids": whole_inputs['input_ids'][:, past_len:-1],
+    }
+    other_inputs = BatchFeature(data=other_inputs)
+    other_inputs = other_inputs.to(model.device)
+    other_inputs['past_key_values'] = past_key_values
+    other_inputs['use_cache'] = True
+
+    output = model( **other_inputs)
+
     final_inputs = {
-        "input_ids": whole_inputs['input_ids'][:, past_len:],
+        "input_ids": whole_inputs['input_ids'][:, -1:],
     }
     final_inputs = BatchFeature(data=final_inputs)
     final_inputs = final_inputs.to(model.device)
     final_inputs['past_key_values'] = past_key_values
     final_inputs['use_cache'] = True
 
-    output = model( **final_inputs, sparse_cache=sparse_cache)
+    output = model( **final_inputs,)
     return output
 
 def convert_attention_to_score(attentions, input_ids, visual_token_id=151646, idx=None):

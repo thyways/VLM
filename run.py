@@ -1,4 +1,5 @@
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 import torch
 from tqdm import tqdm
 import json
@@ -11,7 +12,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='args for main.py')
 
     parser.add_argument('--model_type', type=str, default='qwen2_5_vl', help='Model type: qwen2_5_vl')
-    parser.add_argument('--target_model_path', type=str, default='/home/wmk/code/model_weight/Qwen2.5-VL-32B-Instruct/', help='target model')
+    parser.add_argument('--target_model_path', type=str, default='/home/wmk/code/model_weight/Qwen2.5-VL-32B-Instruct', help='target model')
     parser.add_argument('--draft_model_path', type=str, default='/home/share/model_weight/qwen/Qwen2.5-VL-7B-Instruct/', help='draft model')
     parser.add_argument('--verbose', action='store_true', help='verbose')
 
@@ -26,8 +27,6 @@ def parse_arguments():
     parser.add_argument('--top_p', type=float, default=1, help='top p')
     parser.add_argument('--max_new_tokens', type=int, default=256, help='Maximum number of new tokens to generate')
 
-    parser.add_argument('--gpu_ids', type=str, default="0,1,2,3", help='GPU IDs to use')
-
     args = parser.parse_args()
     
     return args
@@ -36,7 +35,6 @@ if __name__ == "__main__":
 
     args = parse_arguments()
 
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
     model_type = args.model_type
     target_model_path = args.target_model_path
     draft_model_path = args.draft_model_path

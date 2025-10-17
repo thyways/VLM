@@ -995,8 +995,9 @@ class Qwen2_5_VLSdpaAttention(Qwen2_5_VLAttention):
 
         if query_states.shape[2]==1 and isinstance(past_key_value[0],H2OCache):
             key_states, value_states = past_key_value[0].update_H2O_kv(key_states, query_states, value_states)
-            past_key_value[0] = key_states
-            past_key_value[1] = value_states
+            past_key_value[0].update(key_states, dim=2)
+            past_key_value[1].update(value_states, dim=2)
+
 
         past_key_value = None
 
@@ -1312,7 +1313,7 @@ class Qwen2_5_VLModel(Qwen2_5_VLPreTrainedModel):
             hidden_states = layer_outputs[0]
 
             if use_cache:
-                next_decoder_cache = layer_outputs[2 if output_attentions else 1]
+                next_decoder_cache = layer_outputs[1 if output_attentions else 0]
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)

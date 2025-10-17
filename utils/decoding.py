@@ -40,7 +40,7 @@ def Autoregressive(inputs, video_inputs, target_model, max_new_tokens=128, top_k
     with torch.no_grad():
         output = video_chunk_prefill(inputs, video_inputs, target_model, past_key_values, video_group_size, sparse_cache = True)
         logits = output.logits
-        attentions = output.attentions
+        #attentions = output.attentions
         if temperature==0:
             next_token = torch.argmax(logits[:, -1])
             next_token = next_token[None, None]

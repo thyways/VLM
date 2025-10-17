@@ -25,7 +25,7 @@ class H2OCache:
         """
         assert budget - window_size > 0, "budget must be greater than window_size"
         self.budget = budget
-        self.window_size = window_size
+        self.window_size = 1
 
         self.data = data
         self.current_length = current_length
@@ -76,7 +76,12 @@ class H2OCache:
         dst.copy_(tensor)
         self.current_length.add_(tensor.shape[dim])
         return torch.narrow(self.data, 2, 0, self.current_length)
-
+    
+    def update(self, tensor: torch.Tensor, dim: int = 2):
+        dst = self.data.narrow(2, 0, tensor.shape[dim])
+        dst.copy_(tensor)
+        self.data.narrow(2, tensor.shape[dim], self.current_length).zero_()
+        self.current_length.fill_(tensor.shape[dim])
 
     def update_H2O_kv(
         self,
@@ -101,7 +106,7 @@ class H2OCache:
                     dim=-1,
                     dtype=torch.float32,
                 )
-                .mean(dim=-2)
+                #.mean(dim=-2)
                 .to(query_states.dtype)
             )
 
@@ -136,7 +141,7 @@ class H2OCache:
                 self.kept_token_indices.append(cur_indices)
                 self.evicted_token_num += kv_cache_len - self.budget
 
-            indices = indices.unsqueeze(1).unsqueeze(-1).expand(-1, num_kv_heads, -1, head_dim)
+            indices = indices.unsqueeze(-1).expand(-1, -1, -1, head_dim)
 
             k_past_compress = key_states[:, :, : -self.window_size, :].gather(
                 dim=2, index=indices
@@ -148,6 +153,7 @@ class H2OCache:
             v_cur = value_states[:, :, -self.window_size :, :]
             key_states = torch.cat([k_past_compress, k_cur], dim=2)
             value_states = torch.cat([v_past_compress, v_cur], dim=2)
+
             return key_states, value_states
 
 def initialize_past_key_values_draft(model):
