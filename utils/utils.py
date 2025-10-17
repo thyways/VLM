@@ -278,7 +278,7 @@ def video_chunk_prefill(whole_inputs, video_inputs, model, kvcache, video_group_
     final_inputs['past_key_values'] = past_key_values
     final_inputs['use_cache'] = True
 
-    output = model( **final_inputs, sparse_cache=True)
+    output = model( **final_inputs, sparse_cache=sparse_cache)
     return output
 
 def convert_attention_to_score(attentions, input_ids, visual_token_id=151646, idx=None):

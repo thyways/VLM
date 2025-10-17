@@ -35,7 +35,7 @@ from torch.nn import CrossEntropyLoss
 
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache, SlidingWindowCache, StaticCache
-from cache.kv_cache import FlashSimpleCache
+from cache.kv_cache import FullCache
 from cache.sparse_cache import RetrievalCache
 from cache.draft_cache import DraftCache
 from transformers.generation import GenerationMixin

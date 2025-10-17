@@ -10,7 +10,7 @@ from transformers.cache_utils import (
     Tuple,
 )
 
-class FlashSimpleCache:
+class FullCache:
     """
     A key-value cache for the model.
 
@@ -188,14 +188,14 @@ def initialize_past_key_values(model):
         try:
             past_key_values.append(
                 [
-                    FlashSimpleCache(past_key_values_data_list[data_m-devices[0].index][2*bias + j], current_length_data[i * 2 + j])
+                    FullCache(past_key_values_data_list[data_m-devices[0].index][2*bias + j], current_length_data[i * 2 + j])
                     for j in range(2)
                 ]
             )
         except:
             past_key_values.append(
                 [
-                    FlashSimpleCache(past_key_values_data_list[0][2 * bias + j],
+                    FullCache(past_key_values_data_list[0][2 * bias + j],
                             current_length_data[i * 2 + j])
                     for j in range(2)
                 ]
