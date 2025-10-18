@@ -27,7 +27,7 @@ def Autoregressive(inputs, video_inputs, target_model, max_new_tokens=128, top_k
         past_key_values,
         past_key_values_data,
         current_length_data,
-    ) = initialize_past_key_values_draft(target_model)
+    ) = initialize_past_key_values(target_model)
     target_model.model.past_key_values = past_key_values
     target_model.model.past_key_values_data = past_key_values_data
     target_model.model.current_length_data = current_length_data
@@ -208,13 +208,12 @@ def sparse_speculative_decoding(
         target_model,
         draft_model,
         processor,
-        drop_rate=0.9,
-        video_token_id=151656,
         max_new_tokens=512,
         log=False,
         tree_choices=mc_sim_7b_63,
-        idx=None,
-        inputs_drop=None,
+        temperature=0.6,
+        top_k=-1,
+        top_p=0.9,
     ):
         torch.cuda.synchronize()
         infer_start = time.time()
@@ -258,9 +257,9 @@ def sparse_speculative_decoding(
         reset_tree_mode(draft_model)
 
         scores = None
-        sample_token, draft_input_len, scores = initialize_tree_with_TriVLM(
+        sample_token, draft_input_len,= initialize_tree_with_TriVLM(
             inputs, video_inputs, target_model, draft_model, past_key_values, retrieval_past_key_values, draft_past_key_values,
-            video_token_id, drop_rate, idx=idx, inputs_drop=inputs_drop,
+            temperature=temperature, top_k=top_k, top_p=top_p 
         )
 
         input_ids = inputs['input_ids']
@@ -534,30 +533,22 @@ def initialize_tree(inputs,video_inputs, target_model, draft_model, past_key_val
     output_draft = video_chunk_prefill(inputs, video_inputs, draft_model, draft_past_key_values, video_group_size, sparse_cache=True)
     return sample_token
 
-def initialize_tree_with_TriVLM(inputs, video_inputs, target_model, draft_model, past_key_values, retrieval_past_key_values, draft_past_key_values,
-                                 video_token_id=151656, drop_rate=None, idx=None, inputs_drop=None, temperature=0.6, top_k=-1, top_p=0.9):
+def initialize_tree_with_TriVLM(inputs, video_inputs, target_model, draft_model, past_key_values,
+                                retrieval_past_key_values, draft_past_key_values,
+                                temperature=0.6, top_k=-1, top_p=0.9):
     output = video_chunk_prefill(inputs, video_inputs, target_model, past_key_values, video_group_size, sparse_cache = True)
     logits = output.logits
-    attentions = output.attentions
     if temperature==0:
         sample_token = torch.argmax(logits[:, -1])
         sample_token = sample_token[None, None]
     else:
         sample_token = sample(norm_logits(logits[:,-1,:], temperature=temperature ,top_k=top_k, top_p=top_p))
-    #Prefill of Draft Model
-    scores = None
-    inputs_drop = drop_visual_tokens(attentions, inputs, drop_rate=drop_rate,
-                                    visual_token_id=video_token_id, reverse=True, idx=idx,)
-
-    draft_input_len = inputs_drop['input_ids'].shape[1]
 
     #Prefill of Draft Model
-    output_draft = draft_model(
-        **inputs_drop, past_key_values=draft_past_key_values
-    )
-    #draft_output = video_chunk_prefill(inputs, video_inputs, draft_model, draft_past_key_values, video_group_size)
+    output_draft = video_chunk_prefill(inputs, video_inputs, draft_model, draft_past_key_values, video_group_size, sparse_cache=True)
+    draft_input_len = draft_past_key_values[0][0].shape[2]
 
-    return sample_token, draft_input_len, scores
+    return sample_token, draft_input_len,
 
 @torch.no_grad()
 def tree_draft(input_ids, draft_model, draft_past_key_values,len_posi):
@@ -698,11 +689,10 @@ def update_inference_inputs(
         del_len += len(i)
     # print("del_len:",del_len)
     # del_len = 11 # 1+4+4+1+1
-    prev_input_len_draft = draft_past_key_values[0][0].shape[2]-del_len
     for draft_past_key_values_data in draft_past_key_values_data_list:
         draft_past_key_values_data = draft_past_key_values_data[..., :-del_len, :]
     
-    draft_current_length_data.fill_(prev_input_len_draft)
+    draft_current_length_data.fill_(prev_input_len)
 
     prob = sample_p.unsqueeze(0)
     if temperature==0:
@@ -714,8 +704,6 @@ def update_inference_inputs(
     len_posi = input_ids.shape[1] + 1
     tree_logits = tree_draft(input_ids=torch.cat([candidates[None, best_candidate, : accept_length + 1], token],dim=-1),
                               draft_model = draft_model, draft_past_key_values = draft_past_key_values, len_posi = len_posi)
-    
-    prev_input_len_draft += accept_length + 1
 
     new_token += accept_length + 1
 

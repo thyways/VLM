@@ -185,7 +185,7 @@ def decode_video(processor, task, data_instance, frame_num=8, model_type='qwen2_
         #             {
         #                 "type": "video",
         #                 "video":"/home/wmk/code/VLM/data/1408717315-1-192.mp4",
-        #                 "fps": fps,
+        #                 "fps": 1,
         #             },
         #             {"type": "text", "text": "Describe what happen in the video?"},
         #         ],
