@@ -96,8 +96,9 @@ class DraftCache:
         kv_cache_len = key_states.shape[-2]
         num_kv_heads = key_states.shape[1]
 
-        if query_states.shape[-2] > self.window_size:
-            query_states = query_states[:, :, -self.window_size :, :]
+        # if query_states.shape[-2] > self.window_size:
+        #     query_states = query_states[:, :, -self.window_size :, :]
+        self.window_size = query_states.shape[-2]
 
         if kv_cache_len < self.budget:
             return key_states, value_states

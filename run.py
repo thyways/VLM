@@ -19,12 +19,12 @@ def parse_arguments():
     parser.add_argument('--task', type=str, default='VideoDetailCaption', choices=['VideoDetailCaption', 'MVBench', 'MVLU', 'LongVideoBench', 'MMBench'], help='dataset')
     parser.add_argument('--data_path', type=str,default='/home/wmk/code/data/VideoDetailCaption', help='Path to the data directory')
     parser.add_argument('--data_num', type=int, default=100, help='Number of data samples to load')
-    parser.add_argument('--evaluation_num', type=int, default=100,help='Number of evaluation samples')
+    parser.add_argument('--evaluation_num', type=int, default=1,help='Number of evaluation samples')
     parser.add_argument('--frame_num', type=int, default=168, help='Number of frames per video')
     parser.add_argument('--save_path', type=str, default=None, help='Path to save results.')
 
-    parser.add_argument('--temp', type=float, default=0, help='temperature')
-    parser.add_argument('--top_p', type=float, default=1, help='top_p')
+    parser.add_argument('--temp', type=float, default=0.6, help='temperature')
+    parser.add_argument('--top_p', type=float, default=0.9, help='top_p')
     parser.add_argument('--max_new_tokens', type=int, default=256, help='Maximum number of new tokens to generate')
 
     args = parser.parse_args()

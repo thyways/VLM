@@ -297,7 +297,7 @@ def sparse_speculative_decoding(
                 )
             
             best_candidate, accept_length, sample_p = evaluate_posterior(
-                    logits, candidates
+                    logits, candidates, temperature, top_k, top_p,
                 )
             accept_length_total.append(accept_length)
 
@@ -317,7 +317,10 @@ def sparse_speculative_decoding(
                 draft_past_key_values_data,
                 draft_current_length_data,
                 sample_p,
-                draft_input_len
+                draft_input_len,
+                temperature,
+                top_k,
+                top_p,
             )
 
             if new_token >= max_new_tokens:
