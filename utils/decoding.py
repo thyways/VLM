@@ -68,11 +68,13 @@ def Autoregressive(inputs, video_inputs, target_model, max_new_tokens=128, top_k
         torch.cuda.synchronize()
         time3 = time.time()
 
-        return {
-        'output_ids':generated,
-        'inference_time':time3 - time1,
-        'decoding_time':time3 - time2,
-    }
+        result = {
+            'output_ids': generated,
+            'inference_time': time3 - time1,
+            'decoding_time': time3 - time2,
+        }
+    _cleanup_model_inference_cache(target_model)
+    return result
 
 @torch.no_grad()
 def speculative_decoding(
@@ -190,16 +192,24 @@ def speculative_decoding(
             )
             # Currently, we mannually set the generation length for fair comparison.
             if new_token >= max_new_tokens:
-                reset_tree_mode(target_model)
-                reset_tree_mode(draft_model)
-                torch.cuda.synchronize()
-                end = time.time()
-                return {
-                    'output_ids': input_ids,
-                    'inference_time': end - infer_start,
-                    'decoding_time': end - decode_start,
-                    'mean_accept_length': sum(accept_length_total) / len(accept_length_total),
-                }
+                break
+
+        torch.cuda.synchronize()
+        end = time.time()
+        reset_tree_mode(target_model)
+        reset_tree_mode(draft_model)
+        if accept_length_total:
+            mean_accept = sum(accept_length_total) / len(accept_length_total)
+        else:
+            mean_accept = torch.tensor(0, device=input_ids.device)
+        result = {
+            'output_ids': input_ids,
+            'inference_time': end - infer_start,
+            'decoding_time': end - decode_start,
+            'mean_accept_length': mean_accept,
+        }
+        _cleanup_model_inference_cache(target_model, draft_model)
+        return result
             
 @torch.no_grad()
 def sparse_speculative_decoding(
@@ -321,17 +331,25 @@ def sparse_speculative_decoding(
             )
 
             if new_token >= max_new_tokens:
-                reset_tree_mode(target_model)
-                reset_tree_mode(draft_model)
-                torch.cuda.synchronize()
-                end = time.time()
-                return {
-                    'output_ids': input_ids,
-                    'inference_time': end - infer_start,
-                    'decoding_time': end - decode_start,
-                    'mean_accept_length': sum(accept_length_total) / len(accept_length_total),
-                    'scores': scores,
-                }
+                break
+
+        torch.cuda.synchronize()
+        end = time.time()
+        reset_tree_mode(target_model)
+        reset_tree_mode(draft_model)
+        if accept_length_total:
+            mean_accept = sum(accept_length_total) / len(accept_length_total)
+        else:
+            mean_accept = torch.tensor(0, device=input_ids.device)
+        result = {
+            'output_ids': input_ids,
+            'inference_time': end - infer_start,
+            'decoding_time': end - decode_start,
+            'mean_accept_length': mean_accept,
+            'scores': scores,
+        }
+        _cleanup_model_inference_cache(target_model, draft_model)
+        return result
 
 class Timer:
     def __init__(self,name):
@@ -346,7 +364,43 @@ class Timer:
         elapsed = time.perf_counter() - self.start
         #print(f'{self.name} took {elapsed} seconds')
 
-
+def _cleanup_model_inference_cache(*models):
+    """Release KV caches and auxiliary buffers to free GPU memory between samples."""
+    for model in models:
+        if model is None:
+            continue
+        module = getattr(model, "model", None)
+        if module is None:
+            continue
+        past_key_values = getattr(module, "past_key_values", None)
+        if isinstance(past_key_values, (list, tuple)):
+            for layer_cache in past_key_values:
+                if isinstance(layer_cache, (list, tuple)):
+                    for cache in layer_cache:
+                        if hasattr(cache, "data"):
+                            cache.data = None
+                        if hasattr(cache, "current_length"):
+                            cache.current_length = None
+        if hasattr(module, "past_key_values"):
+            module.past_key_values = None
+        if hasattr(module, "past_key_values_data"):
+            module.past_key_values_data = None
+        if hasattr(module, "current_length_data"):
+            module.current_length_data = None
+        if hasattr(module, "rope_deltas"):
+            module.rope_deltas = None
+        if hasattr(module, "tree_mask"):
+            module.tree_mask = None
+        if hasattr(module, "tree_mode"):
+            module.tree_mode = None
+        if hasattr(model, "tree_buffers"):
+            model.tree_buffers = None
+        if hasattr(model, "tree_choices"):
+            model.tree_choices = None
+        if hasattr(model, "tree_buffer"):
+            model.tree_buffer = None
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 def pad_path(path: List[int], length: int, pad_value: int = -2) -> List[int]:
     """
