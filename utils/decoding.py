@@ -68,15 +68,6 @@ def Autoregressive(inputs, video_inputs, target_model, max_new_tokens=128, top_k
         torch.cuda.synchronize()
         time3 = time.time()
 
-<<<<<<< HEAD
-        _cleanup_model_inference_cache(target_model)
-
-        return {
-        'output_ids':generated,
-        'inference_time':time3 - time1,
-        'decoding_time':time3 - time2,
-    }
-=======
         result = {
             'output_ids': generated,
             'inference_time': time3 - time1,
@@ -84,7 +75,6 @@ def Autoregressive(inputs, video_inputs, target_model, max_new_tokens=128, top_k
         }
     _cleanup_model_inference_cache(target_model)
     return result
->>>>>>> 85d766d689c58e9ef9afed9a0596e12b4bf883de
 
 @torch.no_grad()
 def speculative_decoding(
@@ -202,22 +192,6 @@ def speculative_decoding(
             )
             # Currently, we mannually set the generation length for fair comparison.
             if new_token >= max_new_tokens:
-<<<<<<< HEAD
-                reset_tree_mode(target_model)
-                reset_tree_mode(draft_model)
-                torch.cuda.synchronize()
-                end = time.time()
-
-                _cleanup_model_inference_cache(target_model)
-                _cleanup_model_inference_cache(draft_model)
-
-                return {
-                    'output_ids': input_ids,
-                    'inference_time': end - infer_start,
-                    'decoding_time': end - decode_start,
-                    'mean_accept_length': sum(accept_length_total) / len(accept_length_total),
-                }
-=======
                 break
 
         torch.cuda.synchronize()
@@ -236,7 +210,6 @@ def speculative_decoding(
         }
         _cleanup_model_inference_cache(target_model, draft_model)
         return result
->>>>>>> 85d766d689c58e9ef9afed9a0596e12b4bf883de
             
 @torch.no_grad()
 def sparse_speculative_decoding(
@@ -361,21 +334,6 @@ def sparse_speculative_decoding(
             )
 
             if new_token >= max_new_tokens:
-<<<<<<< HEAD
-                reset_tree_mode(target_model)
-                reset_tree_mode(draft_model)
-                torch.cuda.synchronize()
-                end = time.time()
-                return {
-                    'output_ids': input_ids,
-                    'inference_time': end - infer_start,
-                    'decoding_time': end - decode_start,
-                    'mean_accept_length': sum(accept_length_total) / len(accept_length_total),
-                    'scores': scores,
-                }
-        _cleanup_model_inference_cache(target_model)
-        _cleanup_model_inference_cache(draft_model)
-=======
                 break
 
         torch.cuda.synchronize()
@@ -395,7 +353,6 @@ def sparse_speculative_decoding(
         }
         _cleanup_model_inference_cache(target_model, draft_model)
         return result
->>>>>>> 85d766d689c58e9ef9afed9a0596e12b4bf883de
 
 class Timer:
     def __init__(self,name):
