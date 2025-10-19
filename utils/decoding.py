@@ -736,7 +736,6 @@ def initialize_tree_with_pruning(inputs, video_inputs, model, draft_model, past_
     # output = video_chunk_prefill(inputs, video_inputs, model, past_key_values, video_group_size,output_attentions=True)
     logits = output2.logits
     attentions = output2.attentions
-    print(attentions)
     # text_emb = output2.output_embeddings
     sample_token = torch.argmax(logits[:, -1])
     sample_token = sample_token[None, None]
