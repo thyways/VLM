@@ -8,7 +8,7 @@ from typing import List, Tuple
 import torch
 import os
 
-from cache.kv_cache import initialize_past_key_values
+from cache.kv_cache import FlashSimpleCache
 from cache.draft_cache import initialize_past_key_values_draft
 from cache.sparse_cache import initialize_past_key_values_retrieval
 from utils.utils_c import generate_tree_buffers_draft
@@ -17,29 +17,20 @@ from utils.choices import mc_sim_7b_63
 from utils.utils import *
 
 TOPK = 10
-video_group_size = 4
+video_group_size = 64
 
 @torch.no_grad()
-def Autoregressive(inputs, video_inputs, target_model, max_new_tokens=128, top_k=-1, top_p=0.9, temperature=0.6):
+def Autoregressive(inputs, video_inputs, target_model, processor, max_new_tokens=128, top_k=-1, top_p=0.9, temperature=0.6):
     torch.cuda.synchronize()
     time1 = time.time()
 
-    (
-        past_key_values,
-        past_key_values_data,
-        current_length_data,
-    ) = initialize_past_key_values(target_model)
-    target_model.model.past_key_values = past_key_values
-    target_model.model.past_key_values_data = past_key_values_data
-    target_model.model.current_length_data = current_length_data
-
-    target_model.model.tree_mask = None 
+    cache =FlashSimpleCache(target_model)
 
     input_ids = inputs['input_ids']
     batch_size = input_ids.shape[0]
     
     with torch.no_grad():
-        output = video_chunk_prefill(inputs, video_inputs, target_model, past_key_values, video_group_size, sparse_cache = True)
+        output = video_chunk_prefill(inputs, video_inputs, target_model, processor, cache, video_group_size, sparse_cache = True)
         logits = output.logits
         #attentions = output.attentions
         if temperature==0:
@@ -56,7 +47,7 @@ def Autoregressive(inputs, video_inputs, target_model, max_new_tokens=128, top_k
         for step in range(max_new_tokens - 1):
             new_inputs = {
                 'input_ids': next_token,
-                'past_key_values': past_key_values,
+                'past_key_values': cache,
             }
             outputs = target_model(**new_inputs)
 
@@ -108,20 +99,8 @@ def speculative_decoding(
             tree_choices, device=draft_model.model.layers[-1].self_attn.q_proj.weight.device)
 
         # Initialize the past key values
-        (
-                past_key_values,
-                past_key_values_data,
-                current_length_data,
-        ) = initialize_past_key_values(target_model)
-        target_model.model.past_key_values = past_key_values
-        target_model.model.past_key_values_data = past_key_values_data
-        target_model.model.current_length_data = current_length_data
-        
-        (
-                draft_past_key_values,
-                draft_past_key_values_data,
-                draft_current_length_data,
-        ) = initialize_past_key_values(draft_model)
+        cache =FlashSimpleCache(target_model)
+        draft_cache =FlashSimpleCache(draft_model)
 
         input_ids = inputs['input_ids']
         input_ids = input_ids.clone()
@@ -133,7 +112,7 @@ def speculative_decoding(
 
         #Prefill
         sample_token = initialize_tree(
-            inputs,video_inputs, target_model, draft_model, past_key_values, draft_past_key_values, temperature, top_k, top_p
+            inputs,video_inputs, target_model, draft_model, cache, draft_cache, temperature, top_k, top_p
         )
 
         torch.cuda.synchronize()
@@ -142,7 +121,7 @@ def speculative_decoding(
         #First Draft
         first_id = sample_token.to(inputs['input_ids'].device)
         len_posi = inputs['input_ids'].shape[1] + 1
-        tree_logits = tree_draft(first_id, draft_model, draft_past_key_values, len_posi)
+        tree_logits = tree_draft(first_id, draft_model, draft_cache, len_posi)
         target_model.model.tree_mask = tree_buffers["tree_attn_mask"]
         #tree_logits:[11,10]
 
@@ -160,7 +139,7 @@ def speculative_decoding(
             logits, outputs = tree_decoding(
                 target_model,
                 tree_candidates,
-                past_key_values,
+                cache,
                 tree_buffers["tree_position_ids"],
                 input_ids,
                 tree_buffers["retrieve_indices"],
@@ -709,7 +688,7 @@ def initialize_tree(inputs,video_inputs, target_model, draft_model, past_key_val
         sample_token = sample_token[None, None]
     else:
         sample_token = sample(norm_logits(logits[:,-1,:], temperature=temperature ,top_k=top_k, top_p=top_p))
-    output_draft = video_chunk_prefill(inputs, video_inputs, draft_model, draft_past_key_values, video_group_size, sparse_cache=True)
+    output_draft = video_chunk_prefill(inputs, video_inputs, draft_model, draft_past_key_values, video_group_size,)
     return sample_token
 
 def initialize_tree_with_pruning(inputs, video_inputs, model, draft_model, past_key_values, draft_past_key_values,
@@ -999,7 +978,7 @@ def update_inference_inputs_with_pruning(
         token = token[None, None]
     else:
         token = sample(norm_logits(prob.unsqueeze(0), temperature ,top_k, top_p))
-    len_posi = draft_input_len + 1
+    len_posi = (draft_input_len + 1).item()
     # len_posi = input_ids.shape[1] + 1
     tree_logits = tree_draft(input_ids=torch.cat([candidates[None, best_candidate, : accept_length + 1], token],dim=-1),
                               draft_model = draft_model, draft_past_key_values = draft_past_key_values, len_posi = len_posi)
