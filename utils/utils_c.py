@@ -151,7 +151,7 @@ def generate_tree_buffers_draft(tree_choices, device="cuda"):
         repeat_nums[i].append(j - repeat_j+1)
         start += depth_counts[i]
 
-    position_ids = [torch.zeros(ml, dtype=torch.long) for ml in depth_counts]
+    position_ids = [torch.zeros(ml, dtype=torch.long, device=device) for ml in depth_counts]
 
     # start = 0
     # for i in range(len(depth_counts)):

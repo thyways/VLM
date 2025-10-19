@@ -16,7 +16,7 @@ class RetrievalCache:
         current_length (int): Current length of the data being stored.
     """
 
-    def __init__(self, data, current_length, budget=2048,window_size=8,
+    def __init__(self, data, current_length, budget=4096,window_size=8,
                 kernel_size=7,mix_lambda=0.2,retain_ratio=0.1,
                 retain_direction="last_percent",record_kept_token_indices=False,):
         """

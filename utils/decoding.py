@@ -17,7 +17,7 @@ from utils.choices import mc_sim_7b_63
 from utils.utils import *
 
 TOPK = 10
-video_group_size = 1
+video_group_size = 4
 
 @torch.no_grad()
 def Autoregressive(inputs, video_inputs, target_model, max_new_tokens=128, top_k=-1, top_p=0.9, temperature=0.6):
@@ -714,29 +714,29 @@ def initialize_tree(inputs,video_inputs, target_model, draft_model, past_key_val
 
 def initialize_tree_with_pruning(inputs, video_inputs, model, draft_model, past_key_values, draft_past_key_values,
                               method=None, video_token_id=151656, drop_rate=None, idx=None, inputs_drop=None, threshold=None, percentage=None, similarity_threshold=0.95):
-    #Find the last video_token
-    last_video_idx = get_last_video_idx(inputs['input_ids'][0], video_token_id)
-    text_input_ids = inputs['input_ids'][:,last_video_idx+1:].clone()
-    text_attention_mask = inputs['attention_mask'][:,last_video_idx+1:].clone()
+    # #Find the last video_token
+    # last_video_idx = get_last_video_idx(inputs['input_ids'][0], video_token_id)
+    # text_input_ids = inputs['input_ids'][:,last_video_idx+1:].clone()
+    # text_attention_mask = inputs['attention_mask'][:,last_video_idx+1:].clone()
 
     input_ids = inputs['input_ids'].clone()
-    inputs['input_ids'] = inputs['input_ids'][:, :last_video_idx+1]
-    inputs['attention_mask'] = inputs['attention_mask'][:, :last_video_idx+1]
+    # inputs['input_ids'] = inputs['input_ids'][:, :last_video_idx+1]
+    # inputs['attention_mask'] = inputs['attention_mask'][:, :last_video_idx+1]
 
-    #First stage of prefilling video tokens
-    output1 = model(
-        **inputs, past_key_values=past_key_values
-    )
+    # #First stage of prefilling video tokens
+    # output1 = model(
+    #     **inputs, past_key_values=past_key_values
+    # )
 
-    #Second stage of prefilling text tokens
-    output2 = model(
-        input_ids=text_input_ids, 
-        past_key_values=past_key_values, 
-        output_attentions=True,
-    )
-    # output = video_chunk_prefill(inputs, video_inputs, model, past_key_values, video_group_size,output_attentions=True)
-    logits = output2.logits
-    attentions = output2.attentions
+    # #Second stage of prefilling text tokens
+    # output2 = model(
+    #     input_ids=text_input_ids, 
+    #     past_key_values=past_key_values, 
+    #     output_attentions=True,
+    # )
+    output = video_chunk_prefill(inputs, video_inputs, model, past_key_values, video_group_size,output_attentions=True)
+    logits = output.logits
+    attentions = output.attentions
     # text_emb = output2.output_embeddings
     sample_token = torch.argmax(logits[:, -1])
     sample_token = sample_token[None, None]
@@ -758,8 +758,8 @@ def initialize_tree_with_pruning(inputs, video_inputs, model, draft_model, past_
     output_draft = draft_model(
         **inputs_drop, past_key_values=draft_past_key_values
     )
-    print("Target KV:",past_key_values[0][0].shape)
-    print("Draft KV:",draft_past_key_values[0][0].shape)
+    # print("Target KV:",past_key_values[0][0].shape)
+    # print("Draft KV:",draft_past_key_values[0][0].shape)
 
     return sample_token, input_ids, draft_input_len, scores
 

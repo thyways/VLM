@@ -119,15 +119,15 @@ def load_data(task, data_num, data_path):
     return data_video
 
 def decode_video(processor, task, data_instance, frame_num=8, model_type='qwen2_5_vl', data_path=None):
-    # def calculate_fps_for_target_frames(container, target_frames):
-    #         video_stream = container.streams.video[0]
-    #         duration = container.duration / 1000000
-    #         if duration <= 0:
-    #             return 1.0 
+    def calculate_fps_for_target_frames(container, target_frames):
+            video_stream = container.streams.video[0]
+            duration = container.duration / 1000000
+            if duration <= 0:
+                return 1.0 
             
-    #         required_fps = target_frames / duration
-    #         print(f"INFO: Duration: {duration:.2f}s, frame_num: {target_frames}, fps: {required_fps:.2f}")
-    #         return required_fps
+            required_fps = target_frames / duration
+            print(f"INFO: Duration: {duration:.2f}s, frame_num: {target_frames}, fps: {required_fps:.2f}")
+            return required_fps
     
     if model_type == 'qwen2_5_vl':
         if task == "VideoDetailCaption":
@@ -161,7 +161,7 @@ def decode_video(processor, task, data_instance, frame_num=8, model_type='qwen2_
         if total_frames == 0:
             return None
 
-        #fps = calculate_fps_for_target_frames(container, frame_num)
+        fps = calculate_fps_for_target_frames(container, frame_num)
         messages = [
             {
                 "role": "user",
@@ -170,7 +170,7 @@ def decode_video(processor, task, data_instance, frame_num=8, model_type='qwen2_
                         "type": "video",
                         "video": f"file://{video_path}",
                         "max_pixels": 448*448,  
-                        "fps": 2, 
+                        "fps": fps, 
                     },
                     {"type": "text", "text": question},
                 ],
