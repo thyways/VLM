@@ -710,7 +710,7 @@ def initialize_tree_with_pruning(inputs, video_inputs, model, draft_model, past_
     # text_input_ids = inputs['input_ids'][:,last_video_idx+1:].clone()
     # text_attention_mask = inputs['attention_mask'][:,last_video_idx+1:].clone()
 
-    # input_ids = inputs['input_ids'].clone()
+    input_ids = inputs['input_ids'].clone()
     # inputs['input_ids'] = inputs['input_ids'][:, :last_video_idx+1]
     # inputs['attention_mask'] = inputs['attention_mask'][:, :last_video_idx+1]
 
