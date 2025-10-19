@@ -10,6 +10,7 @@ import os
 
 from cache.kv_cache import initialize_past_key_values
 from cache.draft_cache import initialize_past_key_values_draft
+from cache.sparse_cache import initialize_past_key_values_retrieval
 from utils.utils_c import generate_tree_buffers_draft
 from utils.sampling import sample, norm_logits
 from utils.choices import mc_sim_7b_63
@@ -406,15 +407,18 @@ def sparse_speculative_decoding_TriVLM(
         target_model.model.past_key_values_data = past_key_values_data
         target_model.model.current_length_data = current_length_data
 
+        # (
+        #         retrieval_past_key_values,
+        #         retrieval_past_key_values_data,
+        #         retrieval_current_length_data,
+        # ) = initialize_past_key_values_retrieval(target_model)
         retrieval_past_key_values = None
-        retrieval_past_key_data = None
-        retrieval_current_length_data = None
 
         (
                 draft_past_key_values,
                 draft_past_key_values_data,
                 draft_current_length_data,
-        ) = initialize_past_key_values_draft(draft_model)
+        ) = initialize_past_key_values_retrieval(draft_model)
 
 
         #Init

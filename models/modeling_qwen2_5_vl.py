@@ -945,13 +945,13 @@ class Qwen2_5_VLFlashAttention2(Qwen2_5_VLAttention):
         #     is_causal=self.is_causal,
         #     use_top_left_mask=self._flash_attn_uses_top_left_mask,
         # )
-        # attn_output = flash_attn_with_kvcache(
-        #     q=query_states, 
-        #     k_cache=key_states, 
-        #     v_cache=value_states, 
-        #     softmax_scale=1/torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float16)), 
-        #     causal=True
-        # )
+        attn_output = flash_attn_with_kvcache(
+            q=query_states, 
+            k_cache=key_states, 
+            v_cache=value_states, 
+            softmax_scale=1/torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float16)), 
+            causal=True
+        )
 
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
         attn_output = self.o_proj(attn_output)
@@ -1037,6 +1037,11 @@ class Qwen2_5_VLSdpaAttention(Qwen2_5_VLAttention):
             past_key_value[1].update(value_states, dim=2)
 
 
+        if sparse_cache and isinstance(past_key_value[0],RetrievalCache) :
+            key_states, value_states = past_key_value[0].update_retrieval_kv(key_states, query_states, value_states)
+            past_key_value[0].update(key_states, dim=2)
+            past_key_value[1].update(value_states, dim=2)
+            
         past_key_value = None
 
         key_states = repeat_kv(key_states, self.num_key_value_groups)
