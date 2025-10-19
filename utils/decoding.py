@@ -210,9 +210,159 @@ def speculative_decoding(
         }
         _cleanup_model_inference_cache(target_model, draft_model)
         return result
-            
+
 @torch.no_grad()
-def sparse_speculative_decoding(
+def SD_generate_with_pruning(
+        inputs,
+        model,
+        draft_model,
+        processor,
+        method,
+        drop_rate,
+        video_token_id=151656,
+        max_new_tokens=512,
+        log=False,
+        tree_choices=mc_sim_7b_63,
+        idx=None,
+        inputs_drop=None,
+        threshold=None,
+        percentage=None,
+        similarity_threshold=0.95,
+        temperature=0.6,
+        top_k=-1,
+        top_p=0.9,
+    ):
+        torch.cuda.synchronize()
+        infer_start = time.time()
+
+        #Tree Structure
+        tree_buffers = generate_tree_buffers(
+                tree_choices, device=model.model.layers[-1].self_attn.q_proj.weight.device
+            )
+        tree_buffers["retrieve_indices_head"] = tree_buffers["retrieve_indices"].to(
+                model.lm_head.weight.device)
+        model.tree_buffers = tree_buffers
+        model.tree_choices = tree_choices
+
+        #Draft Tree Structure
+        draft_model.tree_buffer = generate_tree_buffers_draft(
+            tree_choices, device=draft_model.model.layers[-1].self_attn.q_proj.weight.device)
+
+        # Initialize the past key values
+        (
+                past_key_values,
+                past_key_values_data,
+                current_length_data,
+        ) = initialize_past_key_values(model)
+        model.model.past_key_values = past_key_values
+        model.model.past_key_values_data = past_key_values_data
+        model.model.current_length_data = current_length_data
+        
+        (
+                draft_past_key_values,
+                draft_past_key_values_data,
+                draft_current_length_data,
+        ) = initialize_past_key_values(draft_model)
+
+
+        #Init
+        reset_tree_mode(model)
+        reset_tree_mode(draft_model)
+
+        scores = None
+        sample_token, input_ids, draft_input_len, scores = initialize_tree_with_pruning(
+            inputs, model, draft_model, past_key_values, draft_past_key_values,
+            method, video_token_id, drop_rate, idx=idx, inputs_drop=inputs_drop,
+            threshold=threshold, percentage=percentage,similarity_threshold=similarity_threshold,
+        )
+
+
+        input_ids = input_ids.clone()
+        input_len = input_ids.shape[1]
+
+
+        torch.cuda.synchronize()
+        decode_start = time.time()
+        #First Draft
+        first_id = sample_token.to(input_ids.device)
+        len_posi = draft_input_len + 1
+        # len_posi = inputs['input_ids'].shape[1] + 1
+        tree_logits = tree_draft(first_id, draft_model, draft_past_key_values, len_posi)
+        model.model.tree_mask = tree_buffers["tree_attn_mask"]
+
+
+        new_token = 0
+        accept_length_total = []
+        for step in range(max_new_tokens):
+            candidates, tree_candidates = generate_candidates(
+                tree_logits,
+                tree_buffers["tree_indices"],
+                tree_buffers["retrieve_indices"],
+                sample_token,
+                processor,
+            )
+
+            logits, outputs = tree_decoding(
+                model,
+                tree_candidates,
+                past_key_values,
+                tree_buffers["tree_position_ids"],
+                input_ids,
+                tree_buffers["retrieve_indices"],
+                )
+            
+            best_candidate, accept_length, sample_p = evaluate_posterior(
+                    logits, candidates, temperature, top_k, top_p,
+                )
+            accept_length_total.append(accept_length)
+
+            input_ids, tree_logits, new_token, hidden_state, sample_token, draft_input_len = update_inference_inputs_with_pruning(
+                input_ids,
+                candidates,
+                best_candidate,
+                accept_length,
+                tree_buffers["retrieve_indices"],
+                logits,
+                tree_logits,
+                new_token,
+                past_key_values_data,
+                current_length_data,
+                draft_model,
+                draft_past_key_values,
+                draft_past_key_values_data,
+                draft_current_length_data,
+                sample_p,
+                draft_input_len
+            )
+
+            # if processor.tokenizer.eos_token_id in input_ids[0, input_len:].tolist():
+            #     reset_tree_mode(model)
+            #     reset_tree_mode(draft_model)
+            #     torch.cuda.synchronize()
+            #     end = time.time()
+            #     return {
+            #         'output_ids': input_ids,
+            #         'inference_time': end - infer_start,
+            #         'decoding_time': end - decode_start,
+            #         'mean_accept_length': sum(accept_length_total) / len(accept_length_total),
+            #     }
+
+            # Currently, we mannually set the generation length for fair comparison.
+            if new_token >= max_new_tokens:
+                reset_tree_mode(model)
+                reset_tree_mode(draft_model)
+                torch.cuda.synchronize()
+                end = time.time()
+                return {
+                    'output_ids': input_ids,
+                    'inference_time': end - infer_start,
+                    'decoding_time': end - decode_start,
+                    'mean_accept_length': sum(accept_length_total) / len(accept_length_total),
+                    'scores': scores,
+                }
+
+@torch.no_grad()
+def sparse_speculative_decoding_TriVLM(
         inputs,
         video_inputs,
         target_model,
@@ -366,44 +516,6 @@ class Timer:
         torch.cuda.synchronize()
         elapsed = time.perf_counter() - self.start
         #print(f'{self.name} took {elapsed} seconds')
-
-def _cleanup_model_inference_cache(*models):
-    """Release KV caches and auxiliary buffers to free GPU memory between samples."""
-    for model in models:
-        if model is None:
-            continue
-        module = getattr(model, "model", None)
-        if module is None:
-            continue
-        past_key_values = getattr(module, "past_key_values", None)
-        if isinstance(past_key_values, (list, tuple)):
-            for layer_cache in past_key_values:
-                if isinstance(layer_cache, (list, tuple)):
-                    for cache in layer_cache:
-                        if hasattr(cache, "data"):
-                            cache.data = None
-                        if hasattr(cache, "current_length"):
-                            cache.current_length = None
-        if hasattr(module, "past_key_values"):
-            module.past_key_values = None
-        if hasattr(module, "past_key_values_data"):
-            module.past_key_values_data = None
-        if hasattr(module, "current_length_data"):
-            module.current_length_data = None
-        if hasattr(module, "rope_deltas"):
-            module.rope_deltas = None
-        if hasattr(module, "tree_mask"):
-            module.tree_mask = None
-        if hasattr(module, "tree_mode"):
-            module.tree_mode = None
-        if hasattr(model, "tree_buffers"):
-            model.tree_buffers = None
-        if hasattr(model, "tree_choices"):
-            model.tree_choices = None
-        if hasattr(model, "tree_buffer"):
-            model.tree_buffer = None
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
 
 def pad_path(path: List[int], length: int, pad_value: int = -2) -> List[int]:
     """
@@ -590,10 +702,63 @@ def initialize_tree(inputs,video_inputs, target_model, draft_model, past_key_val
     output_draft = video_chunk_prefill(inputs, video_inputs, draft_model, draft_past_key_values, video_group_size, sparse_cache=True)
     return sample_token
 
+def initialize_tree_with_pruning(inputs, video_inputs, model, draft_model, past_key_values, draft_past_key_values,
+                              method=None, video_token_id=151656, drop_rate=None, idx=None, inputs_drop=None, threshold=None, percentage=None, similarity_threshold=0.95):
+    # #Find the last video_token
+    # last_video_idx = get_last_video_idx(inputs['input_ids'][0], video_token_id)
+    # text_input_ids = inputs['input_ids'][:,last_video_idx+1:].clone()
+    # text_attention_mask = inputs['attention_mask'][:,last_video_idx+1:].clone()
+
+    # input_ids = inputs['input_ids'].clone()
+    # inputs['input_ids'] = inputs['input_ids'][:, :last_video_idx+1]
+    # inputs['attention_mask'] = inputs['attention_mask'][:, :last_video_idx+1]
+
+    # #First stage of prefilling video tokens
+    # output1 = model(
+    #     **inputs, past_key_values=past_key_values
+    # )
+    # # video_emb = output1.output_embeddings
+    # # video_features = output1.video_hidden_states
+
+    # #Second stage of prefilling text tokens
+    # output2 = model(
+    #     input_ids=text_input_ids, 
+    #     past_key_values=past_key_values, 
+    #     output_attentions=True,
+    # )
+    output = video_chunk_prefill(inputs, video_inputs, model, past_key_values, video_group_size,output_attentions=True)
+    logits = output.logits
+    attentions = output.attentions
+    # text_emb = output2.output_embeddings
+    sample_token = torch.argmax(logits[:, -1])
+    sample_token = sample_token[None, None]
+
+    #Prefill of Draft Model
+    # inputs['input_ids'] = torch.cat([inputs['input_ids'], text_input_ids], dim=1)
+
+    scores = None
+
+    if method == 'specvlm':
+        inputs_drop = drop_visual_tokens_specvlm(attentions, inputs, drop_rate=drop_rate,
+                                    visual_token_id=video_token_id, idx=idx, threshold=threshold, percentage=percentage)
+    else:
+        print("Method not supported")
+
+    draft_input_len = inputs_drop['input_ids'].shape[1]
+
+    #Prefill of Draft Model
+    output_draft = draft_model(
+        **inputs_drop, past_key_values=draft_past_key_values
+    )
+    print("Target KV:",past_key_values[0][0].shape)
+    print("Draft KV:",draft_past_key_values[0][0].shape)
+
+    return sample_token, input_ids, draft_input_len, scores
+
 def initialize_tree_with_TriVLM(inputs, video_inputs, target_model, draft_model, past_key_values,
                                 retrieval_past_key_values, draft_past_key_values,
                                 temperature=0.6, top_k=-1, top_p=0.9):
-    output = video_chunk_prefill(inputs, video_inputs, target_model, past_key_values, video_group_size, sparse_cache = True)
+    output = video_chunk_prefill(inputs, video_inputs, target_model, past_key_values, video_group_size,)
     logits = output.logits
     if temperature==0:
         sample_token = torch.argmax(logits[:, -1])

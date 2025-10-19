@@ -961,6 +961,37 @@ class Qwen2_5_VLFlashAttention2(Qwen2_5_VLAttention):
 
         return attn_output, attn_weights, past_key_value
 
+def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
+        is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
+    L, S = query.size(-2), key.size(-2)
+    scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
+    attn_bias = torch.zeros(1,1,L, S, dtype=query.dtype).to(query.device) #MODIFIED
+    if is_causal:
+        assert attn_mask is None
+        temp_mask = torch.ones(L, S, dtype=torch.bool).tril(diagonal=0)
+        attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+        attn_bias.to(query.dtype)
+
+    if attn_mask is not None:
+        if attn_mask.dtype == torch.bool:
+            attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
+        else:
+            attn_bias += attn_mask.to(attn_bias.device) #MODIFIED
+
+    if enable_gqa:
+        key = key.repeat_interleave(query.size(-3)//key.size(-3), -3)
+        value = value.repeat_interleave(query.size(-3)//value.size(-3), -3)
+
+    query = query.to(dtype=torch.bfloat16) #MODIFIED
+    key = key.to(dtype=torch.bfloat16)
+
+    attn_weight = (query @ key.transpose(-2, -1) * scale_factor).to(torch.float16)
+    attn_weight += attn_bias
+    attn_weight = torch.softmax(attn_weight, dim=-1)
+    attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
+
+    return attn_weight @ value, attn_weight
+
 class Qwen2_5_VLSdpaAttention(Qwen2_5_VLAttention):
     """
     Qwen2 attention module using torch.nn.functional.scaled_dot_product_attention. This module inherits from
@@ -996,9 +1027,9 @@ class Qwen2_5_VLSdpaAttention(Qwen2_5_VLAttention):
         query_states, key_states = apply_multimodal_rotary_pos_emb(
             query_states, key_states, cos, sin, self.rope_scaling["mrope_section"]
         )
-
-        key_states = past_key_value[0].cat(key_states, dim=2)
-        value_states = past_key_value[1].cat(value_states, dim=2)
+        if past_key_value is not None:
+            key_states = past_key_value[0].cat(key_states, dim=2)
+            value_states = past_key_value[1].cat(value_states, dim=2)
 
         if sparse_cache and isinstance(past_key_value[0],DraftCache) :
             key_states, value_states = past_key_value[0].update_draft_kv(key_states, query_states, value_states)
@@ -1025,15 +1056,25 @@ class Qwen2_5_VLSdpaAttention(Qwen2_5_VLAttention):
         # The q_len > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not create a causal mask in case q_len == 1.
         is_causal = True if causal_mask is None and q_len > 1 else False
 
-        attn_output = torch.nn.functional.scaled_dot_product_attention(
-            query_states,
-            key_states,
-            value_states,
-            attn_mask=causal_mask,
-            dropout_p=self.attention_dropout if self.training else 0.0,
-            is_causal=is_causal,
-        )
-        attn_weight = None
+        if output_attentions:
+            attn_output, attn_weight = scaled_dot_product_attention(
+                query_states,
+                key_states,
+                value_states,
+                attn_mask=causal_mask,
+                dropout_p=self.attention_dropout if self.training else 0.0,
+                is_causal=is_causal,
+            )
+        else:
+            attn_output = torch.nn.functional.scaled_dot_product_attention(
+                query_states,
+                key_states,
+                value_states,
+                attn_mask=causal_mask,
+                dropout_p=self.attention_dropout if self.training else 0.0,
+                is_causal=is_causal,
+            )
+            attn_weight = None
 
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.view(bsz, q_len, self.hidden_size)

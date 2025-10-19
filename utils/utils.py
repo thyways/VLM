@@ -170,7 +170,7 @@ def decode_video(processor, task, data_instance, frame_num=8, model_type='qwen2_
                     {
                         "type": "video",
                         "video": f"file://{video_path}",
-                        #"max_pixels": 448*448,  
+                        "max_pixels": 448*448,  
                         "fps": 2, 
                     },
                     {"type": "text", "text": question},
@@ -208,7 +208,7 @@ def decode_video(processor, task, data_instance, frame_num=8, model_type='qwen2_
     print("INFO: Input length:", inputs['input_ids'].shape[1])
     return inputs, video_inputs
 
-def video_chunk_prefill(whole_inputs, video_inputs, model, kvcache, video_group_size=8, sparse_cache=False):
+def video_chunk_prefill(whole_inputs, video_inputs, model, kvcache, video_group_size=8, output_attentions=False, sparse_cache=False):
     whole_inputs = whole_inputs.to(model.device)
     n_video_tokens = (whole_inputs['input_ids'] == model.config.video_token_id).sum().item()
     video_token_idxs = (whole_inputs['input_ids'] == model.config.video_token_id).nonzero(as_tuple=True)[1]
@@ -278,8 +278,114 @@ def video_chunk_prefill(whole_inputs, video_inputs, model, kvcache, video_group_
     final_inputs['past_key_values'] = past_key_values
     final_inputs['use_cache'] = True
 
-    output = model( **final_inputs, sparse_cache=sparse_cache)
+    output = model( **final_inputs, output_attentions=output_attentions, sparse_cache=sparse_cache)
     return output
+
+def drop_visual_tokens_specvlm(attentions, inputs, drop_rate=0.5, visual_token_id=151647, output_scores=False, reverse=False, idx=None,threshold=None, percentage=None):
+    scores = convert_attention_to_score(attentions, inputs['input_ids'], visual_token_id, idx)
+    # print_scores_bar(scores)
+    
+    visual_token_mask = (inputs['input_ids'] == visual_token_id)
+    visual_positions = torch.where(visual_token_mask[0])[0]
+    n_image_tokens = len(visual_positions)
+    
+    # Calculate total tokens to keep
+    tokens_to_keep = int(n_image_tokens * (1 - drop_rate))
+
+    # Split between attention and uniform
+    if threshold != None and percentage != None:
+        print("Can't use threshold and percentage at the same time.")
+    elif threshold != None:
+        if (1 - drop_rate) < threshold:
+            attention_tokens = tokens_to_keep
+            uniform_tokens = 0
+        else:
+            attention_tokens = int(n_image_tokens * threshold)
+            uniform_tokens = tokens_to_keep - attention_tokens
+    elif percentage != None:
+        attention_tokens = get_attention_token_from_percentage(scores, percentage)
+        if attention_tokens > tokens_to_keep:
+            uniform_tokens = 0
+            attention_tokens = tokens_to_keep
+        else:
+            uniform_tokens = tokens_to_keep - attention_tokens
+    # print("attention tokens:",attention_tokens)
+        
+    # Get attention-based indices
+    scores_tensor = torch.tensor(scores)
+    if reverse:
+        _, attention_sorted = torch.sort(scores_tensor, descending=False)
+    else:
+        _, attention_sorted = torch.sort(scores_tensor, descending=True)
+    attention_indices = attention_sorted[:attention_tokens]
+    
+    # Create mask of available positions for uniform sampling
+    available_mask = torch.ones(n_image_tokens, dtype=torch.bool)
+    available_mask[attention_indices] = False
+    available_positions = torch.where(available_mask)[0]
+    
+    # Uniform sample from remaining positions
+    if uniform_tokens != 0:
+        stride = len(available_positions) / uniform_tokens
+    else:
+        stride = len(available_positions)
+    if len(available_positions)-1 >=0 :
+        uniform_positions = torch.linspace(0, len(available_positions)-1, uniform_tokens, dtype=torch.long)
+        uniform_indices = available_positions[uniform_positions]
+    else:
+        uniform_indices=None
+    
+    # Combine and sort indices
+    keep_indices = torch.cat([attention_indices, uniform_indices])
+    keep_indices, _ = torch.sort(keep_indices)
+    
+    # Apply mask
+    keep_positions = visual_positions[keep_indices]
+    non_visual_mask = ~visual_token_mask[0]
+    final_mask = non_visual_mask.clone()
+    final_mask[keep_positions] = True
+    
+    new_input_ids = inputs['input_ids'][:, final_mask]
+    
+    new_inputs = inputs
+    new_inputs['input_ids'] = new_input_ids
+    new_inputs['selected_indices'] = keep_indices
+    new_inputs['attention_mask'] = None
+    
+    if output_scores:
+        return new_inputs, keep_indices
+    return new_inputs
+
+def get_attention_token_from_percentage(scores, threshold):
+    # Convert to tensor if not already
+    if not isinstance(scores, torch.Tensor):
+        scores_tensor = torch.tensor(scores)
+    else:
+        scores_tensor = scores
+    
+    # Sort scores in descending order
+    sorted_scores, _ = torch.sort(scores_tensor, descending=True)
+    
+    # Calculate total sum of all scores
+    total_sum = scores_tensor.sum()
+    
+    # Target sum to reach
+    target_sum = total_sum * threshold
+    
+    # Initialize variables
+    current_sum = 0.0
+    token_count = 0
+    
+    # Add tokens until reaching or exceeding the threshold
+    for score in sorted_scores:
+        current_sum += score
+        token_count += 1
+        
+        if current_sum >= target_sum:
+            break
+    
+    return token_count
+
 
 def convert_attention_to_score(attentions, input_ids, visual_token_id=151646, idx=None):
     # attentions: [num_layers, 1, num_heads, seq_len_q, seq_len_k]
@@ -310,37 +416,3 @@ def convert_attention_to_score(attentions, input_ids, visual_token_id=151646, id
     visual_attention = avg_attention[visual_positions]
     
     return visual_attention.tolist()
-
-def drop_visual_tokens(attentions, inputs, drop_rate=0.5, visual_token_id=151647,output_scores=False, reverse=False, idx=None):
-    scores = convert_attention_to_score(attentions, inputs['input_ids'], visual_token_id, idx)
-    
-    visual_token_mask = (inputs['input_ids'] == visual_token_id)
-    visual_positions = torch.where(visual_token_mask[0])[0]
-    n_image_tokens = len(visual_positions)
-    
-    tokens_to_keep = int(n_image_tokens * (1 - drop_rate))
-    
-    scores_tensor = torch.tensor(scores)
-    if reverse == True:
-        _ , indices = torch.sort(scores_tensor, descending=False)
-    else:
-        _, indices = torch.sort(scores_tensor, descending=True)
-    keep_indices = indices[:tokens_to_keep]
-    keep_indices, _ = torch.sort(keep_indices)
-    keep_positions = visual_positions[keep_indices]
-    
-    non_visual_mask = ~visual_token_mask[0]
-    final_mask = non_visual_mask.clone()
-    final_mask[keep_positions] = True
-    
-    new_input_ids = inputs['input_ids'][:, final_mask]
-    
-    new_inputs = inputs.copy()
-    new_inputs['input_ids'] = new_input_ids
-    new_inputs['selected_indices'] = keep_indices
-    new_inputs['attention_mask'] = None
-    
-    if output_scores:
-        return new_inputs, scores
-    return new_inputs
-
