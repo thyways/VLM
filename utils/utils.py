@@ -49,7 +49,7 @@ def load_model(model_type, target_model_path, draft_model_path):
 def load_data(task, data_num, data_path):
     if task == "VideoDetailCaption":
         data_video = load_dataset(
-                "/home/wmk/code/data/VideoDetailCaption",
+                data_path,
                 split="test",
                 # cache_dir=cache_dir,
             ).shuffle(seed=42).select(range(data_num))
