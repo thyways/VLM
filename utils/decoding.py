@@ -358,7 +358,8 @@ def SD_generate_with_pruning(
 
                 _cleanup_model_inference_cache(model, draft_model)
 
-                scores = convert_attention_to_score(outputs.attentions, input_ids, video_token_id, idx) #len(idx)>1 
+                #scores = convert_attention_to_score(outputs.attentions, input_ids, video_token_id, idx) #len(idx)>1 
+                scores = None
                 return {
                     'output_ids': input_ids,
                     'inference_time': end - infer_start,
