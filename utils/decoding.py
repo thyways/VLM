@@ -354,6 +354,10 @@ def SD_generate_with_pruning(
                 reset_tree_mode(draft_model)
                 torch.cuda.synchronize()
                 end = time.time()
+
+                _cleanup_model_inference_cache(model, draft_model)
+
+                scores = convert_attention_to_score(outputs.attentions, input_ids, video_token_id, idx) #len(idx)>1 
                 return {
                     'output_ids': input_ids,
                     'inference_time': end - infer_start,
