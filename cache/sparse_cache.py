@@ -17,8 +17,8 @@ class RetrievalCache:
     """
 
     def __init__(self, data, current_length, budget=2048,window_size=8,
-                kernel_size=7,mix_lambda=0.07,retain_ratio=0.1,
-                retain_direction="last",record_kept_token_indices=False,):
+                kernel_size=7,mix_lambda=0.2,retain_ratio=0.1,
+                retain_direction="last_percent",record_kept_token_indices=False,):
         """
         Initialize the KVCache.
 
@@ -98,6 +98,7 @@ class RetrievalCache:
 
         head_dim = query_states.shape[-1]
         kv_cache_len = key_states.shape[-2]
+        self.window_size = query_states.shape[-2]  
 
         if kv_cache_len < self.budget:
             return key_states, value_states
