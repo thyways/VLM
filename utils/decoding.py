@@ -214,6 +214,7 @@ def speculative_decoding(
 @torch.no_grad()
 def SD_generate_with_pruning(
         inputs,
+        video_inputs,
         model,
         draft_model,
         processor,
@@ -271,7 +272,7 @@ def SD_generate_with_pruning(
 
         scores = None
         sample_token, input_ids, draft_input_len, scores = initialize_tree_with_pruning(
-            inputs, model, draft_model, past_key_values, draft_past_key_values,
+            inputs, video_inputs, model, draft_model, past_key_values, draft_past_key_values,
             method, video_token_id, drop_rate, idx=idx, inputs_drop=inputs_drop,
             threshold=threshold, percentage=percentage,similarity_threshold=similarity_threshold,
         )
