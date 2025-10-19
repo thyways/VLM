@@ -4,7 +4,6 @@ import torch
 from tqdm import tqdm
 from datasets import load_dataset, concatenate_datasets
 import av
-import matplotlib.pyplot as plt
 
 from transformers import AutoProcessor 
 
