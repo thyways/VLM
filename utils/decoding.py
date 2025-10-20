@@ -133,7 +133,7 @@ def speculative_decoding(
 
         #Prefill
         sample_token = initialize_tree(
-            inputs,video_inputs, target_model, draft_model, past_key_values, draft_past_key_values, temperature, top_k, top_p
+            inputs,video_inputs, target_model, draft_model, processor, past_key_values, draft_past_key_values, temperature, top_k, top_p
         )
 
         torch.cuda.synchronize()
@@ -700,9 +700,9 @@ def generate_candidates(tree_logits, tree_indices, retrieve_indices, sample_toke
     tree_candidates = tree_candidates.unsqueeze(0)
     return cart_candidates,  tree_candidates
 
-def initialize_tree(inputs,video_inputs, target_model, draft_model, past_key_values, draft_past_key_values,
+def initialize_tree(inputs,video_inputs, target_model, draft_model, processor, past_key_values, draft_past_key_values,
                      temperature=0.6, top_k=-1, top_p=0.9):
-    output = video_chunk_prefill(inputs, video_inputs, target_model, past_key_values, video_group_size)
+    output = video_chunk_prefill(inputs, video_inputs, target_model, processor, past_key_values, video_group_size)
     logits = output.logits
     if temperature==0:
         sample_token = torch.argmax(logits[:, -1])

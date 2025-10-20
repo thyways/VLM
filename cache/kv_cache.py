@@ -95,18 +95,6 @@ class FullCache:
             key_states = key_states[:, :, :-self.prompt_length, :]
             value_states = value_states[:, :, :-self.prompt_length, :]
             super_result = super().update(key_states, value_states, layer_idx, cache_kwargs)
-            # postprocess
-            bsz, num_heads, q_len, head_dim = query_states.shape
-            num_key_value_heads, k_len = key_states.shape[1:3]
-            # attention scores of query to key
-            key_states_repeated = repeat_kv(key_states, num_heads // num_key_value_heads)
-            attn_scores = torch.einsum("bhqd,bhkd->bhqk", query_states, key_states_repeated) / (head_dim ** 0.5)
-            attn_scores = torch.softmax(attn_scores, dim=-1, dtype=torch.float32).to(
-                query_states.dtype
-            ).detach() # # (bz, num_heads, Q, K)
-            attn_scores = attn_scores.sum(-2).mean(1) # average over num_key_value_heads (bz, k_len)
-            self.accum_attn_scores[layer_idx] = self.accum_attn_scores.get(layer_idx, [])
-            self.accum_attn_scores[layer_idx].append(attn_scores)
             return super_result
 
 

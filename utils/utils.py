@@ -207,11 +207,12 @@ def decode_video(processor, task, data_instance, frame_num=8, model_type='qwen2_
     print("INFO: Input length:", inputs['input_ids'].shape[1])
     return inputs, video_inputs
 
-def video_chunk_prefill(whole_inputs, video_inputs, model, kvcache, video_group_size=8, output_attentions=False, sparse_cache=False):
+def video_chunk_prefill(whole_inputs, video_inputs, model, processor, kvcache, retrieval_kvcache, video_group_size=8, output_attentions=False, sparse_cache=False):
     whole_inputs = whole_inputs.to(model.device)
     n_video_tokens = (whole_inputs['input_ids'] == model.config.video_token_id).sum().item()
     video_token_idxs = (whole_inputs['input_ids'] == model.config.video_token_id).nonzero(as_tuple=True)[1]
     first_video_token_id_idx = video_token_idxs[0].item()
+    last_video_token_id_idx = video_token_idxs[-1].item()
     position_ids, rope_deltas = model.get_rope_index(
         whole_inputs['input_ids'],
         whole_inputs.get('image_grid_thw', None),
@@ -221,7 +222,9 @@ def video_chunk_prefill(whole_inputs, video_inputs, model, kvcache, video_group_
     )
     model.rope_deltas = rope_deltas
     
-    temporal_patch_size = 2
+    video_group_size = video_group_size
+    temporal_patch_size = temporal_patch_size = processor.image_processor.temporal_patch_size
+
     if not video_group_size % temporal_patch_size == 0:
         video_group_size += temporal_patch_size - (video_group_size % temporal_patch_size)
     if video_group_size is not None and video_group_size > 0:
@@ -240,17 +243,31 @@ def video_chunk_prefill(whole_inputs, video_inputs, model, kvcache, video_group_
             )
         pixel_values_videos_group_size = round((video_group_size / len(video_inputs[0])) * whole_inputs['pixel_values_videos'].shape[0])
         pixel_values_videos_groups = whole_inputs['pixel_values_videos'].split(pixel_values_videos_group_size)
+    else:
+        video_groups = [video_inputs[0]]
+        video_groups_tokens = [n_video_tokens]
+        video_groups_grid_thw = [whole_inputs['video_grid_thw']]
+        pixel_values_videos_groups = [whole_inputs['pixel_values_videos']]
     
     # preprepare the chunk processing
     past_key_values = kvcache
+    retrieval_past_key_values = retrieval_kvcache
     past_len = 0
     video_token_idxs = (whole_inputs['input_ids'] == model.config.video_token_id).nonzero(as_tuple=True)[1]
     first_video_token_id_idx = video_token_idxs[0].item()
+    last_video_token_id_idx = video_token_idxs[-1].item()
+    prompt_input_ids = whole_inputs['input_ids'][:, last_video_token_id_idx + 1:]
+    prompt_attention_mask = whole_inputs['attention_mask'][:, last_video_token_id_idx + 1:]
+
+    past_key_values[0].set_prompt_length(prompt_input_ids.shape[1])
     video_groups_tokens[0] += first_video_token_id_idx
-        
+    
+    print(f"Processing total of {len(video_groups)} video groups, each with {video_group_size} frames.")
+         # set the prompt length for the cache
     # start processing the video groups
-    for i, pixel_values_videos_groups_i in tqdm(enumerate(pixel_values_videos_groups), 
-        desc="Processing video groups", total=len(pixel_values_videos_groups), disable=not False):
+    for i, pixel_values_videos_groups_i in tqdm(enumerate(pixel_values_videos_groups),
+        desc="Processing video groups", total=len(pixel_values_videos_groups), disable= False): 
+        
         group_i_inputs = {
             "video_grid_thw": video_groups_grid_thw[i],
             "second_per_grid_ts": whole_inputs['second_per_grid_ts'],
@@ -258,25 +275,37 @@ def video_chunk_prefill(whole_inputs, video_inputs, model, kvcache, video_group_
         }
         group_i_inputs = BatchFeature(data=group_i_inputs)
         group_i_inputs['input_ids'] = whole_inputs['input_ids'][:, past_len:past_len + video_groups_tokens[i]]
-        group_i_inputs['attention_mask'] = whole_inputs['attention_mask'][:, :past_len + video_groups_tokens[i]]
-        group_i_inputs['past_key_values'] = past_key_values
+        group_i_inputs['attention_mask'] = whole_inputs['attention_mask'][:, past_len:past_len + video_groups_tokens[i]]
+
+        group_i_inputs['input_ids'] = torch.cat((group_i_inputs['input_ids'], prompt_input_ids), dim=1)
+        group_i_inputs['attention_mask'] = torch.cat((group_i_inputs['attention_mask'], prompt_attention_mask), dim=1)
+    
         group_i_inputs['cache_position'] = torch.arange(group_i_inputs['input_ids'].shape[1], dtype=torch.int64, device=model.device) + past_len
         group_i_inputs['position_ids'] = position_ids[:, :, past_len:past_len + group_i_inputs['input_ids'].shape[1]]
         past_len += video_groups_tokens[i] # only the video group tokens are counted, prompt tokens are not counted
         group_i_inputs = group_i_inputs.to(model.device)
         group_i_inputs['use_cache'] = True
+        group_i_inputs['past_key_values'] = past_key_values
+
         with torch.no_grad():
             outputs = model(**group_i_inputs,)
+            past_key_values = outputs.past_key_values
     assert past_len < whole_inputs['input_ids'].shape[1], "The past length should be less than the final input length."   
-
+    past_key_values.set_prompt_length(0)
     final_inputs = {
         "input_ids": whole_inputs['input_ids'][:, past_len:],
+        "attention_mask": whole_inputs['attention_mask'][:, past_len:],
     }
     final_inputs = BatchFeature(data=final_inputs)
+    final_inputs['cache_position'] = torch.arange(final_inputs.input_ids.shape[1], dtype=torch.int64, device=model.device) + past_len
+    final_inputs['position_ids'] = position_ids[:, :, past_len:]
+    assert final_inputs['input_ids'].shape[1] == final_inputs['position_ids'].shape[2], "The input ids and position ids should have the same length, but got {} and {}".format(
+        final_inputs['input_ids'].shape[1], final_inputs['position_ids'].shape[2])
     final_inputs = final_inputs.to(model.device)
     final_inputs['past_key_values'] = past_key_values
+    final_inputs['retrieval_past_key_values'] = retrieval_past_key_values
     final_inputs['use_cache'] = True
-
+    
     output = model( **final_inputs, output_attentions=output_attentions, sparse_cache=sparse_cache)
     return output
 
