@@ -1,4 +1,5 @@
 import os
+import re
 import numpy as np
 import torch
 from tqdm import tqdm
@@ -208,7 +209,7 @@ def decode_video(processor, task, data_instance, frame_num=8, model_type='qwen2_
     print("INFO: Input length:", inputs['input_ids'].shape[1])
     return inputs, video_inputs
 
-def video_chunk_prefill(whole_inputs, video_inputs, model, processor, kvcache, video_group_size=8, output_attentions=False, sparse_cache=False):
+def video_chunk_prefill(whole_inputs, video_inputs, model, processor, kvcache, retrieval_kvcache, video_group_size=8, output_attentions=False, sparse_cache=False):
     whole_inputs = whole_inputs.to(model.device)
     n_video_tokens = (whole_inputs['input_ids'] == model.config.video_token_id).sum().item()
     video_token_idxs = (whole_inputs['input_ids'] == model.config.video_token_id).nonzero(as_tuple=True)[1]
@@ -252,16 +253,16 @@ def video_chunk_prefill(whole_inputs, video_inputs, model, processor, kvcache, v
     
     # preprepare the chunk processing
     past_key_values = kvcache
+    retrieval_past_key_values = retrieval_kvcache  
     past_len = 0
     video_token_idxs = (whole_inputs['input_ids'] == model.config.video_token_id).nonzero(as_tuple=True)[1]
     first_video_token_id_idx = video_token_idxs[0].item()
     last_video_token_id_idx = video_token_idxs[-1].item()
     prompt_input_ids = whole_inputs['input_ids'][:, last_video_token_id_idx + 1:]
     prompt_attention_mask = whole_inputs['attention_mask'][:, last_video_token_id_idx + 1:]
-
+    
     past_key_values.set_prompt_length(prompt_input_ids.shape[1])
     video_groups_tokens[0] += first_video_token_id_idx
-    
     print(f"Processing total of {len(video_groups)} video groups, each with {video_group_size} frames.")
          # set the prompt length for the cache
     # start processing the video groups
@@ -303,9 +304,10 @@ def video_chunk_prefill(whole_inputs, video_inputs, model, processor, kvcache, v
         final_inputs['input_ids'].shape[1], final_inputs['position_ids'].shape[2])
     final_inputs = final_inputs.to(model.device)
     final_inputs['past_key_values'] = past_key_values
+    final_inputs['retrieval_past_key_values'] = retrieval_past_key_values
     final_inputs['use_cache'] = True
 
-    output = model( **final_inputs, output_attentions=output_attentions, sparse_cache=sparse_cache)
+    output = model( **final_inputs,)
     return output
 
 def drop_visual_tokens_specvlm(attentions, inputs, drop_rate=0.5, visual_token_id=151647, output_scores=False, reverse=False, idx=None,threshold=None, percentage=None):
