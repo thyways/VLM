@@ -11,7 +11,7 @@ class RetrievalCache:
         pruning_layer_idx_list=[12,16],
         window_size=8,
         kernel_size=7,
-        mix_lambda=0.07,
+        mix_lambda=1,
         retain_ratio=0.1,
         retain_direction="last",
         **kwargs,
@@ -60,16 +60,17 @@ class RetrievalCache:
                 stride=1,
             )
 
-            similarity_cos = cal_similarity(
-                key_states,
-                retain_ratio=self.retain_ratio,
-                retain_direction=self.retain_direction,
-            )[:, : -self.window_size]
+            # similarity_cos = cal_similarity(
+            #     key_states,
+            #     retain_ratio=self.retain_ratio,
+            #     retain_direction=self.retain_direction,
+            # )[:, : -self.window_size]
 
-            final_score = attn_cache * self.mix_lambda - similarity_cos * (
-                1 - self.mix_lambda
-            )
+            # final_score = attn_cache * self.mix_lambda - similarity_cos * (
+            #     1 - self.mix_lambda
+            # )
 
+            final_score = attn_cache*self.mix_lambda
             # shape: (bsz, num_kv_heads, budget - window_size)
             indices = final_score.topk(budget - self.window_size, dim=-1).indices
 

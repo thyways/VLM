@@ -1,4 +1,5 @@
 import os
+from tabnanny import verbose
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 import torch
 from tqdm import tqdm
@@ -19,7 +20,7 @@ def parse_arguments():
     parser.add_argument('--task', type=str, default='VideoDetailCaption', choices=['VideoDetailCaption', 'MVBench', 'MVLU', 'LongVideoBench', 'MMBench'], help='dataset')
     parser.add_argument('--data_path', type=str,default='/home/wmk/code/data/VideoDetailCaption', help='Path to the data directory')
     parser.add_argument('--data_num', type=int, default=100, help='Number of data samples to load')
-    parser.add_argument('--evaluation_num', type=int, default=1,help='Number of evaluation samples')
+    parser.add_argument('--evaluation_num', type=int, default=10,help='Number of evaluation samples')
     parser.add_argument('--frame_num', type=int, default=192, help='Number of frames per video')
     parser.add_argument('--save_path', type=str, default=None, help='Path to save results.')
 
@@ -80,16 +81,16 @@ if __name__ == "__main__":
         if inputs == None:
             continue
 
-        output_ar = Autoregressive(inputs, video_inputs, target_model, processor, max_new_tokens=max_new_tokens, top_k=top_k, top_p=top_p, temperature=temperature)
+        output_ar = Autoregressive(inputs, video_inputs, target_model, processor, max_new_tokens=max_new_tokens, top_k=top_k, top_p=top_p, temperature=temperature, verbose=True)
         print("\n")
         print("-------Autoregressive Decoding-------")
-        #print("Inference Time:", output_ar['inference_time'])
+        print("Inference Time:", output_ar['inference_time'])
         print("Decoding Time:", output_ar['decoding_time'])
-        output_text = processor.batch_decode(output_ar['output_ids'], skip_special_tokens=True)[0]
-        print("Output:")
-        print(output_text)
+        print("100k Latency:", output_ar['100k_latency'])
         print("\n")
         results['Autoregressive_decoding'].append(output_ar['decoding_time'])
+
+
 
         # output_sd = speculative_decoding(
         #         inputs,

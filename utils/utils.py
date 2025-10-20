@@ -9,6 +9,7 @@ import av
 from transformers import AutoProcessor 
 
 from models.modeling_qwen2_5_vl import Qwen2_5_VLForConditionalGeneration
+from models.modeling_qwen2_5_vl_draft import Qwen2_5_VLForConditionalGeneration_draft
 from models.processing_qwen2_5_vl import Qwen2_5_VLProcessor
 from qwen_vl_utils import process_vision_info
 from transformers.feature_extraction_utils import BatchFeature
@@ -32,7 +33,7 @@ def load_model(model_type, target_model_path, draft_model_path):
             torch_dtype=torch.float16,
             attn_implementation = "flash_attention_2",
         )
-        draft_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        draft_model = Qwen2_5_VLForConditionalGeneration_draft.from_pretrained(
             draft_model_path, 
             device_map="auto", 
             low_cpu_mem_usage=True,
@@ -170,7 +171,8 @@ def decode_video(processor, task, data_instance, frame_num=8, model_type='qwen2_
                     {
                         "type": "video",
                         "video": f"file://{video_path}",
-                        "max_pixels": 448*448,  
+                        "max_pixels": 448*448,
+                        "min_pixels": 448*448,  
                         "fps": fps, 
                     },
                     {"type": "text", "text": question},

@@ -13,6 +13,7 @@ from cache.draft_cache import DraftCache
 from cache.sparse_cache import RetrievalCache
 from utils.utils_c import generate_tree_buffers_draft
 from utils.sampling import sample, norm_logits
+from termcolor import colored
 from utils.choices import mc_sim_7b_63
 from utils.utils import *
 
@@ -20,7 +21,7 @@ TOPK = 10
 video_group_size = 64
 
 @torch.no_grad()
-def Autoregressive(inputs, video_inputs, target_model, processor, max_new_tokens=128, top_k=-1, top_p=0.9, temperature=0.6):
+def Autoregressive(inputs, video_inputs, target_model, processor, max_new_tokens=128, top_k=-1, top_p=0.9, temperature=0.6, verbose=True):
     torch.cuda.synchronize()
     time1 = time.time()
 
@@ -28,7 +29,8 @@ def Autoregressive(inputs, video_inputs, target_model, processor, max_new_tokens
     retrieval_cache =FlashSimpleCache(target_model)
 
     with torch.no_grad():
-        output = video_chunk_prefill(inputs, video_inputs, target_model, processor, cache, retrieval_cache, video_group_size, sparse_cache = True)
+        output = video_chunk_prefill(inputs, video_inputs, target_model, processor, cache, retrieval_cache, video_group_size, sparse_cache = False)
+        #output = video_chunk_prefill(inputs, video_inputs, target_model, processor, cache, None, video_group_size, sparse_cache = True)
         logits = output.logits
         #attentions = output.attentions
         if temperature==0:
@@ -37,7 +39,8 @@ def Autoregressive(inputs, video_inputs, target_model, processor, max_new_tokens
         else:
             next_token = sample(norm_logits(logits[:,-1,:], temperature=temperature ,top_k=top_k, top_p=top_p))
 
-        generated = torch.cat([inputs['input_ids'], next_token], dim=1)
+        if verbose:
+            spec_stream(next_token[0], processor, 'cyan')
 
         torch.cuda.synchronize()
         time2 = time.time()
@@ -54,13 +57,14 @@ def Autoregressive(inputs, video_inputs, target_model, processor, max_new_tokens
                 next_token = torch.argmax(outputs.logits[:, -1:], dim=-1)
             else:
                 next_token = sample(norm_logits(outputs.logits, temperature=temperature ,top_k=top_k, top_p=top_p))
-            generated = torch.cat([generated, next_token], dim=-1)
+            if verbose:
+                spec_stream(next_token[0], processor, 'cyan')
 
         torch.cuda.synchronize()
         time3 = time.time()
 
         result = {
-            'output_ids': generated,
+            '100k_latency':(time3 - time2)/max_new_tokens*1000,
             'inference_time': time3 - time1,
             'decoding_time': time3 - time2,
         }
@@ -1035,3 +1039,15 @@ def _cleanup_model_inference_cache(*models):
             model.tree_buffer = None
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+
+def spec_stream(pred_token_idx, tokenizer, color='blue'):
+    decoded_token = tokenizer.decode(
+            pred_token_idx,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=True,
+            # spaces_between_special_tokens=False,
+        )
+
+    decoded_token = decoded_token.replace("<0x0A>", "\n")
+
+    print(colored(decoded_token, color), flush=True, end=" ")
