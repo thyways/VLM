@@ -12,7 +12,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='args for main.py')
 
     parser.add_argument('--model_type', type=str, default='qwen2_5_vl', help='Model type: qwen2_5_vl')
-    parser.add_argument('--target_model_path', type=str, default='/home/share/model_weight/qwen/Qwen2.5-VL-7B-Instruct/', help='target model')
+    parser.add_argument('--target_model_path', type=str, default='/home/wmk/code/model_weight/Qwen2.5-VL-32B-Instruct', help='target model')
     parser.add_argument('--draft_model_path', type=str, default='/home/share/model_weight/qwen/Qwen2.5-VL-3B-Instruct/', help='draft model')
     parser.add_argument('--verbose', action='store_true', help='verbose')
 
@@ -20,7 +20,7 @@ def parse_arguments():
     parser.add_argument('--data_path', type=str,default='/home/wmk/code/data/VideoDetailCaption', help='Path to the data directory')
     parser.add_argument('--data_num', type=int, default=100, help='Number of data samples to load')
     parser.add_argument('--evaluation_num', type=int, default=1,help='Number of evaluation samples')
-    parser.add_argument('--frame_num', type=int, default=168, help='Number of frames per video')
+    parser.add_argument('--frame_num', type=int, default=192, help='Number of frames per video')
     parser.add_argument('--save_path', type=str, default=None, help='Path to save results.')
 
     parser.add_argument('--temp', type=float, default=0.01, help='temperature')

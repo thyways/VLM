@@ -887,12 +887,10 @@ class Qwen2_5_VLFlashAttention2(Qwen2_5_VLAttention):
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position, "query_states": query_states}
             key_states, value_states = retrieval_past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
         
-        if retrieval_past_key_values is not None:
+        if retrieval_past_key_values is not None and len(retrieval_past_key_values.key_cache)<=self.layer_idx:
             key_states_compress, value_states_compress = self.retrieval_cache.update_retrieval_kv(key_states, query_states, value_states, self.layer_idx)
             retrieval_past_key_values.update(key_states_compress, value_states_compress, self.layer_idx, cache_kwargs)
             
-
-
         # repeat k/v heads if n_kv_heads < n_heads
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
@@ -935,30 +933,17 @@ class Qwen2_5_VLFlashAttention2(Qwen2_5_VLAttention):
         else:
             sliding_window = None
 
-        if past_key_value is not None:
-            attn_output = _flash_attention_forward(
-                query_states,
-                key_states,
-                value_states,
-                attention_mask,
-                q_len,
-                dropout=dropout_rate,
-                sliding_window=sliding_window,
-                is_causal=self.is_causal,
-                use_top_left_mask=self._flash_attn_uses_top_left_mask,
-            )
-        else:
-            attn_output = _flash_attention_forward(
-                query_states,
-                key_states,
-                value_states,
-                attention_mask_retrieval,
-                q_len,
-                dropout=dropout_rate,
-                sliding_window=sliding_window,
-                is_causal=self.is_causal,
-                use_top_left_mask=self._flash_attn_uses_top_left_mask,
-            )
+        attn_output = _flash_attention_forward(
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            q_len,
+            dropout=dropout_rate,
+            sliding_window=sliding_window,
+            is_causal=self.is_causal,
+            use_top_left_mask=self._flash_attn_uses_top_left_mask,
+        )
 
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
         attn_output = self.o_proj(attn_output)

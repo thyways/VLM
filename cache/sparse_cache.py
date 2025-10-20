@@ -7,8 +7,8 @@ import bisect
 class RetrievalCache:
     def __init__(
         self,
-        budget_list=[4096,2048,1024,512],
-        pruning_layer_idx_list=[4,8,12],
+        budget_list=[4096,4096,4096],
+        pruning_layer_idx_list=[12,16],
         window_size=8,
         kernel_size=7,
         mix_lambda=0.07,

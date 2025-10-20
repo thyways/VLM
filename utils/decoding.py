@@ -27,9 +27,6 @@ def Autoregressive(inputs, video_inputs, target_model, processor, max_new_tokens
     cache =FlashSimpleCache(target_model)
     retrieval_cache =FlashSimpleCache(target_model)
 
-    input_ids = inputs['input_ids']
-    batch_size = input_ids.shape[0]
-    
     with torch.no_grad():
         output = video_chunk_prefill(inputs, video_inputs, target_model, processor, cache, retrieval_cache, video_group_size, sparse_cache = True)
         logits = output.logits
