@@ -68,9 +68,10 @@ def TriVLM(inputs, video_inputs, target_model, draft_model, processor, max_new_t
                     'retrieval_past_key_values': retrieval_cache,
                 }
             with torch.no_grad():
-                speculation_prob = target_model(**new_inputs).logits
+                logits = target_model(**new_inputs).logits
+                speculation_prob = norm_logits(logits[0], temperature=temperature ,top_k=top_k, top_p=top_p)
                 speculation_probs_list.append(speculation_prob)
-                pred_token_idx = sample(norm_logits(speculation_prob, temperature=temperature ,top_k=top_k, top_p=top_p))
+                pred_token_idx = sample(speculation_prob)
                 draft_count += 1
                 verify_tokens[:, n+1:n+2] = pred_token_idx
                 draft_tokens.append(pred_token_idx.item())
@@ -98,7 +99,7 @@ def TriVLM(inputs, video_inputs, target_model, draft_model, processor, max_new_t
             
             # Calculate acceptance probability
             accept_prob = torch.min(torch.tensor([1.0], device=r.device), 
-                                  (verify_probs[i+1][token_id] / speculation_probs_list[i][0, token_id]))
+                                  (verify_probs[i][token_id] / speculation_probs_list[i][0, token_id]))
             
             if r < accept_prob:
                 count += 1
