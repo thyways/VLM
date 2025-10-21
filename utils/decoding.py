@@ -26,10 +26,8 @@ def Autoregressive(inputs, video_inputs, target_model, processor, max_new_tokens
     time1 = time.time()
 
     cache =FlashSimpleCache(target_model)
-    #retrieval_cache =FlashSimpleCache(target_model)
-
+    
     with torch.no_grad():
-        #output = video_chunk_prefill(inputs, video_inputs, target_model, processor, cache, retrieval_cache, video_group_size, sparse_cache = False)
         output = video_chunk_prefill(inputs, video_inputs, target_model, processor, cache, None, video_group_size, sparse_cache = True)
         logits = output.logits
         #attentions = output.attentions
@@ -49,7 +47,6 @@ def Autoregressive(inputs, video_inputs, target_model, processor, max_new_tokens
             new_inputs = {
                 'input_ids': next_token,
                 'past_key_values': cache,
-                #'retrieval_past_key_values': retrieval_cache,
             }
             outputs = target_model(**new_inputs)
 
@@ -64,7 +61,7 @@ def Autoregressive(inputs, video_inputs, target_model, processor, max_new_tokens
         time3 = time.time()
 
         result = {
-            '100k_latency':(time3 - time2)/max_new_tokens*1000,
+            'latency':(time3 - time2)/max_new_tokens*1000,
             'inference_time': time3 - time1,
             'decoding_time': time3 - time2,
         }

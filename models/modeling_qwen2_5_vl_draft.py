@@ -843,7 +843,7 @@ class Qwen2_5_VLFlashAttention2(Qwen2_5_VLAttention):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.retrieval_cache = RetrievalCache()
+        self.draft_cache = DraftCache()
 
         # TODO: Should be removed once Flash Attention for RoCm is bumped to 2.1.
         # flash_attn<2.1 generates top-left aligned causal mask, while what is needed here is bottom-right alignment, that was made default for flash_attn>=2.1. This attribute is used to handle this difference. Reference: https://github.com/Dao-AILab/flash-attention/releases/tag/v2.1.0.
@@ -856,7 +856,7 @@ class Qwen2_5_VLFlashAttention2(Qwen2_5_VLAttention):
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Cache] = None,
-        retrieval_past_key_values: Optional[Cache] = None,
+        draft_past_key_values: Optional[Cache] = None,
         output_attentions: bool = False,
         use_cache: bool = False,
         cache_position: Optional[torch.LongTensor] = None,
@@ -882,9 +882,14 @@ class Qwen2_5_VLFlashAttention2(Qwen2_5_VLAttention):
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position, "query_states": query_states}  # Specific to RoPE models
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-            key_states_compress, value_states_compress = self.retrieval_cache.update_retrieval_kv(key_states, query_states, value_states, self.layer_idx)
-            past_key_value.key_cache[self.layer_idx] = key_states_compress
-            past_key_value.value_cache[self.layer_idx] = value_states_compress
+        
+        if past_key_value is None:
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position, "query_states": query_states}
+            key_states, value_states = draft_past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
+        
+        if draft_past_key_values is not None and len(draft_past_key_values.key_cache)<=self.layer_idx:
+            key_states_compress, value_states_compress = self.draft_cache.update_draft_kv(key_states, query_states, value_states,)
+            draft_past_key_values.update(key_states_compress, value_states_compress, self.layer_idx, cache_kwargs)
             
         # repeat k/v heads if n_kv_heads < n_heads
         key_states = repeat_kv(key_states, self.num_key_value_groups)
@@ -1105,7 +1110,7 @@ class Qwen2_5_VLDecoderLayer(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        retrieval_past_key_values: Optional[Tuple[torch.Tensor]] = None,
+        draft_past_key_values: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
         cache_position: Optional[torch.LongTensor] = None,
@@ -1145,7 +1150,7 @@ class Qwen2_5_VLDecoderLayer(nn.Module):
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_value=past_key_value,
-            retrieval_past_key_values=retrieval_past_key_values,
+            draft_past_key_values=draft_past_key_values,
             output_attentions=output_attentions,
             use_cache=use_cache,
             cache_position=cache_position,
@@ -1244,7 +1249,7 @@ class Qwen2_5_VLModel(Qwen2_5_VLPreTrainedModel):
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values=None,
-        retrieval_past_key_values=None,
+        draft_past_key_values=None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
@@ -1284,8 +1289,8 @@ class Qwen2_5_VLModel(Qwen2_5_VLPreTrainedModel):
                 past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
             )
 
-        if cache_position is None and past_key_values is None and retrieval_past_key_values is not None:
-            past_seen_tokens = retrieval_past_key_values.get_seq_length() if retrieval_past_key_values is not None else 0
+        if cache_position is None and past_key_values is None and draft_past_key_values is not None:
+            past_seen_tokens = draft_past_key_values.get_seq_length() if draft_past_key_values is not None else 0
             cache_position= torch.arange(
                 past_seen_tokens, past_seen_tokens+ inputs_embeds.shape[1], device=inputs_embeds.device
             )
@@ -1303,7 +1308,7 @@ class Qwen2_5_VLModel(Qwen2_5_VLPreTrainedModel):
             )
         else:
             causal_mask = self._update_causal_mask(
-                attention_mask, inputs_embeds, cache_position, retrieval_past_key_values, output_attentions
+                attention_mask, inputs_embeds, cache_position, draft_past_key_values, output_attentions
             )
 
         hidden_states = inputs_embeds
@@ -1338,7 +1343,7 @@ class Qwen2_5_VLModel(Qwen2_5_VLPreTrainedModel):
                     attention_mask=causal_mask,
                     position_ids=position_ids,
                     past_key_value=past_key_values,
-                    retrieval_past_key_values=retrieval_past_key_values,
+                    draft_past_key_values=draft_past_key_values,
                     output_attentions=output_attentions,
                     use_cache=use_cache,
                     cache_position=cache_position,
@@ -1857,7 +1862,7 @@ class Qwen2_5_VLForConditionalGeneration_draft(Qwen2_5_VLPreTrainedModel, Genera
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values=None, 
-        retrieval_past_key_values=None,
+        draft_past_key_values=None,
         graph_cache: Optional[Cache] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
@@ -1968,7 +1973,7 @@ class Qwen2_5_VLForConditionalGeneration_draft(Qwen2_5_VLPreTrainedModel, Genera
             position_ids=position_ids,
             attention_mask=attention_mask,
             past_key_values=past_key_values,
-            retrieval_past_key_values=retrieval_past_key_values,
+            draft_past_key_values=draft_past_key_values,
             inputs_embeds=inputs_embeds,
             use_cache=use_cache,
             output_attentions=output_attentions,

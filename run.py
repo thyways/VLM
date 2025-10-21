@@ -8,25 +8,26 @@ import argparse
 from utils.choices import mc_sim_7b_63, chain
 from utils.utils import *
 from utils.decoding import *
+from utils.decoding_new import *
 #/home/wmk/code/model_weight/Qwen2.5-VL-32B-Instruct
 def parse_arguments():
     parser = argparse.ArgumentParser(description='args for main.py')
 
     parser.add_argument('--model_type', type=str, default='qwen2_5_vl', help='Model type: qwen2_5_vl')
     parser.add_argument('--target_model_path', type=str, default='/home/wmk/code/model_weight/Qwen2.5-VL-32B-Instruct', help='target model')
-    parser.add_argument('--draft_model_path', type=str, default='/home/share/model_weight/qwen/Qwen2.5-VL-3B-Instruct/', help='draft model')
+    parser.add_argument('--draft_model_path', type=str, default='/home/share/model_weight/qwen/Qwen2.5-VL-7B-Instruct/', help='draft model')
     parser.add_argument('--verbose', action='store_true', help='verbose')
 
     parser.add_argument('--task', type=str, default='VideoDetailCaption', choices=['VideoDetailCaption', 'MVBench', 'MVLU', 'LongVideoBench', 'MMBench'], help='dataset')
     parser.add_argument('--data_path', type=str,default='/home/wmk/code/data/VideoDetailCaption', help='Path to the data directory')
     parser.add_argument('--data_num', type=int, default=100, help='Number of data samples to load')
-    parser.add_argument('--evaluation_num', type=int, default=10,help='Number of evaluation samples')
+    parser.add_argument('--evaluation_num', type=int, default=100,help='Number of evaluation samples')
     parser.add_argument('--frame_num', type=int, default=192, help='Number of frames per video')
     parser.add_argument('--save_path', type=str, default=None, help='Path to save results.')
 
     parser.add_argument('--temp', type=float, default=0.01, help='temperature')
     parser.add_argument('--top_p', type=float, default=0.9, help='top_p')
-    parser.add_argument('--max_new_tokens', type=int, default=256, help='Maximum number of new tokens to generate')
+    parser.add_argument('--max_new_tokens', type=int, default=128, help='Maximum number of new tokens to generate')
 
     args = parser.parse_args()
     
@@ -81,15 +82,21 @@ if __name__ == "__main__":
         if inputs == None:
             continue
 
-        output_ar = Autoregressive(inputs, video_inputs, target_model, processor, max_new_tokens=max_new_tokens, top_k=top_k, top_p=top_p, temperature=temperature, verbose=True)
-        print("\n")
-        print("-------Autoregressive Decoding-------")
-        print("Inference Time:", output_ar['inference_time'])
-        print("Decoding Time:", output_ar['decoding_time'])
-        print("100k Latency:", output_ar['100k_latency'])
-        print("\n")
-        results['Autoregressive_decoding'].append(output_ar['decoding_time'])
+        # output_ar = Autoregressive(inputs, video_inputs, target_model, processor, max_new_tokens=max_new_tokens, top_k=top_k, top_p=top_p, temperature=temperature, verbose=True)
+        # print("\n")
+        # print("-------Autoregressive Decoding-------")
+        # print("Inference Time:", output_ar['inference_time'])
+        # print("Decoding Time:", output_ar['decoding_time'])
+        # print("Latency:", output_ar['latency'])
+        # print("\n")
+        # results['Autoregressive_decoding'].append(output_ar['decoding_time'])
 
+        output_trivlm = TriVLM(inputs, video_inputs, target_model, draft_model, processor, max_new_tokens=max_new_tokens, top_k=top_k, top_p=top_p, temperature=temperature, verbose=False)
+        print("\n")
+        print("-------TriVLM Decoding-------")
+        print("Decoding Time:", output_trivlm['decoding_time'])
+        print("\n")
+        results['TriVLM_decode'].append(output_trivlm['decoding_time'])
 
 
         # output_sd = speculative_decoding(

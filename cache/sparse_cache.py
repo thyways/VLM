@@ -7,8 +7,8 @@ import bisect
 class RetrievalCache:
     def __init__(
         self,
-        budget_list=[4096,4096,4096],
-        pruning_layer_idx_list=[12,16],
+        budget=8192,
+
         window_size=8,
         kernel_size=7,
         mix_lambda=1,
@@ -16,8 +16,7 @@ class RetrievalCache:
         retain_direction="last",
         **kwargs,
     ):
-        self.budget_list = budget_list
-        self.pruning_layer_idx_list = pruning_layer_idx_list
+        self.budget = budget
         self.window_size = window_size
         self.kernel_size = kernel_size
         self.mix_lambda = mix_lambda
@@ -35,10 +34,10 @@ class RetrievalCache:
         head_dim = query_states.shape[-1]
         kv_cache_len = key_states.shape[-2]
         #print(layer_idx)
-        budget = self.budget_list[bisect.bisect_left(self.pruning_layer_idx_list, layer_idx)]
+
         self.window_size = query_states.shape[-2]
 
-        if kv_cache_len < budget:
+        if kv_cache_len < self.budget:
             return key_states, value_states
         else:
             attn_weights = compute_attention_scores(query_states, key_states)
@@ -72,7 +71,7 @@ class RetrievalCache:
 
             final_score = attn_cache*self.mix_lambda
             # shape: (bsz, num_kv_heads, budget - window_size)
-            indices = final_score.topk(budget - self.window_size, dim=-1).indices
+            indices = final_score.topk(self.budget - self.window_size, dim=-1).indices
 
             indices = indices.unsqueeze(-1).expand(-1, -1, -1, head_dim)
 
