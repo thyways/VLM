@@ -10,7 +10,7 @@ from cache.kv_cache import FlashSimpleCache
 from cache.draft_cache import DraftCache
 from cache.sparse_cache import RetrievalCache
 from utils.utils_c import generate_tree_buffers_draft
-from utils.sampling import sample, norm_logits
+from utils.sampling import sample, norm_logits ,max_fn
 from termcolor import colored
 from utils.choices import mc_sim_7b_63
 from utils.utils import *
@@ -23,8 +23,8 @@ def TriVLM(inputs, video_inputs, target_model, draft_model, processor, max_new_t
 
     cache = FlashSimpleCache(target_model)
     retrieval_cache = FlashSimpleCache(target_model)
-    tem_cache = FlashSimpleCache(draft_model)
-    draft_cache = FlashSimpleCache(draft_model)
+    # tem_cache = FlashSimpleCache(draft_model)
+    # draft_cache = FlashSimpleCache(draft_model)
 
     with torch.no_grad():
         output = video_chunk_prefill(inputs, video_inputs, target_model, processor, cache, retrieval_cache, video_group_size, sparse_cache = False)
@@ -53,23 +53,16 @@ def TriVLM(inputs, video_inputs, target_model, draft_model, processor, max_new_t
 
         pred_token_idx = next_token
         
-        # Reset counters for this speculation round
-        round_resample_count = 0
-        round_accepted_count = 0
-        round_target_sample_count = 0
-        round_draft_count = 0
-
-        return_generated_ids = []
-        return_speculation_probs = []
         speculation_probs_list = []
-        return_generated_ids.append(next_token.item())
-
         verify_tokens = torch.full((1, gamma + 1), 0, device=target_model.device)
         verify_tokens[:, 0] = next_token
 
         # Draft phase: generate gamma tokens using target model
-        n = 0
-        while n < gamma and token_count + n < max_new_tokens:
+        draft_tokens = []
+        for n in range(gamma):
+            if token_count + n >= max_new_tokens:
+                break
+                
             new_inputs = {
                     'input_ids': pred_token_idx,
                     'retrieval_past_key_values': retrieval_cache,
@@ -78,9 +71,9 @@ def TriVLM(inputs, video_inputs, target_model, draft_model, processor, max_new_t
                 speculation_prob = target_model(**new_inputs).logits
                 speculation_probs_list.append(speculation_prob)
                 pred_token_idx = sample(norm_logits(speculation_prob, temperature=temperature ,top_k=top_k, top_p=top_p))
-                round_draft_count += 1
+                draft_count += 1
                 verify_tokens[:, n+1:n+2] = pred_token_idx
-            n += 1
+                draft_tokens.append(pred_token_idx.item())
 
         # Verification phase
         new_verify_inputs = {
@@ -88,69 +81,78 @@ def TriVLM(inputs, video_inputs, target_model, draft_model, processor, max_new_t
                     'past_key_values': cache,
                 }
 
-        verify_prob = target_model(**new_verify_inputs).logits
-        n = 0
-        accepted_tokens = 0
+        with torch.no_grad():
+            logits = target_model(**new_verify_inputs).logits
+
+        count = 0
+        verify_probs = []
+    
+        probs = norm_logits(logits[0], temperature=temperature ,top_k=top_k, top_p=top_p)
+        for i in range(len(draft_tokens) + 1):
+            verify_probs.append(probs[i])
         
-        while n < gamma and token_count + n < max_new_tokens:   
+        # Verify each speculated token
+        for i in range(len(draft_tokens)):
             r = torch.rand(1, device = target_model.device)
-            token_idx = verify_tokens[:, n+1:n+2].item()
+            token_id = draft_tokens[i]
             
             # Calculate acceptance probability
-            acceptance_prob = torch.min(torch.tensor([1.0], device=r.device), 
-                                     (verify_prob[0, n, token_idx] / speculation_probs_list[n][0, 0, token_idx]))
+            accept_prob = torch.min(torch.tensor([1.0], device=r.device), 
+                                  (verify_probs[i+1][token_id] / speculation_probs_list[i][0, token_id]))
             
-            if r < acceptance_prob:
-                # Accept the speculated token
-                return_speculation_probs.append(verify_prob[:,n,:])
-                return_generated_ids.append(token_idx)
+            if r < accept_prob:
+                count += 1
+                accepted_count += 1
+                generated_tokens.append(token_id)
                 if verbose:
-                    spec_stream(torch.tensor([token_idx], device=target_model.device), processor, 'green')
-                round_accepted_count += 1
-                accepted_tokens += 1
-                n += 1
+                    spec_stream(torch.tensor([[token_id]]), processor, 'green')
                 
-                # Generate next token from target model
-                if n < gamma and token_count + n < max_new_tokens:
-                    pred_token_idx = sample(norm_logits(verify_prob[:,n,:], temperature=temperature ,top_k=top_k, top_p=top_p))
-                    return_speculation_probs.append(verify_prob[:,n,:])
-                    return_generated_ids.append(pred_token_idx.item())
-                    if verbose:
-                        spec_stream(pred_token_idx, processor, 'blue')
-                    round_target_sample_count += 1
-                    n += 1
-                    verify_tokens[:, n:n+1] = pred_token_idx
+                if token_id == processor.tokenizer.eos_token_id:
+                    break
             else:
-                # Reject and resample
-                pred_token_idx = sample(norm_logits(verify_prob[:,n,:], temperature=temperature ,top_k=top_k, top_p=top_p))
-                return_speculation_probs.append(verify_prob[:,n,:])
-                return_generated_ids.append(pred_token_idx.item())
+                resample_count += 1
+                # Resample from the difference distribution
+                resampled_token = sample(max_fn(verify_probs[i+1] - speculation_probs_list[i][0]))
+                generated_tokens.append(resampled_token.item())
                 if verbose:
-                    spec_stream(pred_token_idx, processor, 'red')
-                round_resample_count += 1
-                n += 1
-                verify_tokens[:, n:n+1] = pred_token_idx
-                break
+                    spec_stream(resampled_token, processor, 'red')
+                
+                if resampled_token.item() == processor.tokenizer.eos_token_id:
+                    break
 
-        # Update global counters
-        resample_count += round_resample_count
-        accepted_count += round_accepted_count
-        target_sample_count += round_target_sample_count
-        draft_count += round_draft_count
+        # Update token count
+        token_count += count + 1  # +1 for the initial token
         
-        # Add accepted tokens to the final output
-        generated_tokens.extend(return_generated_ids[1:accepted_tokens+1])  # Skip the first token as it's already added
-        token_count += accepted_tokens + 1  # +1 for the resampled token
-        
-        # Update next_token for next iteration
-        next_token = pred_token_idx
+        # Update cache
+        cache.seen_tokens -= (len(draft_tokens) - count)
+        cache.reset_cache()
+        retrieval_cache.seen_tokens -= (len(draft_tokens) + 1) 
+        retrieval_cache.reset_cache()
+        retrieval_cache.spec_update(cache, len(draft_tokens) - count)
+
+        # If all tokens were accepted, sample one more from the target model
+        if count == len(draft_tokens) and token_count < max_new_tokens:
+            target_sample_count += 1
+            next_token = sample(verify_probs[-1])
+            generated_tokens.append(next_token.item())
+            if verbose:
+                spec_stream(next_token, processor, 'blue')
+            token_count += 1
+        else:
+            # Use the last resampled token or the last accepted token
+            if count < len(draft_tokens):
+                next_token = torch.tensor([[generated_tokens[-1]]]).to(target_model.device)
+            else:
+                next_token = torch.tensor([[generated_tokens[-1]]]).to(target_model.device)
         
         # Calculate acceptance rate for this round
-        if round_draft_count > 0:
-            acc_rate = round_accepted_count / round_draft_count
-            acc_rate_middle_list.append(acc_rate)
-            if verbose:
-                print(f"\nRound acceptance rate: {acc_rate:.3f}")
+        acc_rate = count / len(draft_tokens) if len(draft_tokens) > 0 else 0
+        acc_rate_middle_list.append(acc_rate)
+        print(f"\nRound acceptance rate: {acc_rate:.3f}")
+        
+        # Check for EOS token
+        if generated_tokens[-1] == processor.tokenizer.eos_token_id:
+            break
 
     # Final statistics
     torch.cuda.synchronize()
@@ -158,18 +160,15 @@ def TriVLM(inputs, video_inputs, target_model, draft_model, processor, max_new_t
     
     total_time = time2 - time1
     tokens_per_second = len(generated_tokens) / total_time if total_time > 0 else 0
-    
-    if verbose:
-        print(f"\n=== TriVLM Decoding Statistics ===")
-        print(f"Total tokens generated: {len(generated_tokens)}")
-        print(f"Total time: {total_time:.3f}s")
-        print(f"Tokens per second: {tokens_per_second:.2f}")
-        print(f"Accepted tokens: {accepted_count}")
-        print(f"Resampled tokens: {resample_count}")
-        print(f"Target model samples: {target_sample_count}")
-        print(f"Draft model samples: {draft_count}")
-        if acc_rate_middle_list:
-            print(f"Average acceptance rate: {sum(acc_rate_middle_list)/len(acc_rate_middle_list):.3f}")
+
+    print(f"\n=== TriVLM Decoding Statistics ===")
+    print(f"Total tokens generated: {len(generated_tokens)}")
+    print(f"Total time: {total_time:.3f}s")
+    print(f"Tokens per second: {tokens_per_second:.2f}")
+    print(f"Accepted tokens: {accepted_count}")
+    print(f"Resampled tokens: {resample_count}")
+    print(f"Target model samples: {target_sample_count}")
+    print(f"Draft model samples: {draft_count}")
 
     return {
         'generated_tokens': generated_tokens,

@@ -79,6 +79,17 @@ class FlashSimpleCache(DynamicCache):
             self.accum_attn_scores[layer_idx].append(attn_scores)
             return super_result
 
+    def reset_cache(self):
+        for layer_idx in range(len(self.key_cache)):
+            self.key_cache[layer_idx] = self.key_cache[layer_idx][..., :self.seen_tokens, :]
+            self.value_cache[layer_idx] = self.value_cache[layer_idx][..., :self.seen_tokens, :]
+
+    def spec_update(self, kv_cache, count):
+        for layer_idx in range(len(self.key_cache)):
+            self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx],kv_cache.key_cache[layer_idx][..., kv_cache.seen_tokens-self.gamma-1+count:, :]], dim=-2)
+            self.value_cache[layer_idx]= torch.cat([self.value_cache[layer_idx],kv_cache.value_cache[layer_idx][..., kv_cache.seen_tokens-self.gamma-1+count:, :]], dim=-2)
+        self.seq_len = self.key_cache[layer_idx].shape[2]
+
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
     This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
