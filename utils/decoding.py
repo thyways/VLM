@@ -26,11 +26,11 @@ def Autoregressive(inputs, video_inputs, target_model, processor, max_new_tokens
     time1 = time.time()
 
     cache =FlashSimpleCache(target_model)
-    retrieval_cache =FlashSimpleCache(target_model)
+    #retrieval_cache =FlashSimpleCache(target_model)
 
     with torch.no_grad():
-        output = video_chunk_prefill(inputs, video_inputs, target_model, processor, cache, retrieval_cache, video_group_size, sparse_cache = False)
-        #output = video_chunk_prefill(inputs, video_inputs, target_model, processor, cache, None, video_group_size, sparse_cache = True)
+        #output = video_chunk_prefill(inputs, video_inputs, target_model, processor, cache, retrieval_cache, video_group_size, sparse_cache = False)
+        output = video_chunk_prefill(inputs, video_inputs, target_model, processor, cache, None, video_group_size, sparse_cache = True)
         logits = output.logits
         #attentions = output.attentions
         if temperature==0:
@@ -48,8 +48,8 @@ def Autoregressive(inputs, video_inputs, target_model, processor, max_new_tokens
         for step in range(max_new_tokens - 1):
             new_inputs = {
                 'input_ids': next_token,
-                #'past_key_values': cache,
-                'retrieval_past_key_values': retrieval_cache,
+                'past_key_values': cache,
+                #'retrieval_past_key_values': retrieval_cache,
             }
             outputs = target_model(**new_inputs)
 
