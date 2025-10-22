@@ -71,6 +71,10 @@ if __name__ == "__main__":
     results['TriVLM_decode'] = []
     results['TriVLM_accept_length'] = []
 
+    results['speed_up_trivlm'] = []
+    results['speed_up_specvlm'] = []
+    results['speed_up_sd'] = []
+
     for i in tqdm(range(evaluation_num)):
         data_instance = data_video[i]
         inputs, video_inputs = decode_video(processor, task, data_instance,frame_num = frame_num, model_type = model_type, data_path=data_path)
@@ -154,20 +158,31 @@ if __name__ == "__main__":
         # print("Inference Time:", output_specvlm['inference_time'])
         print("Decoding Time:", output_trivlm['decoding_time'])
         print("Average Accept Length:", output_trivlm["mean_accept_length"].item())
+        print("Speed Up TriVLM:", output_ar['decoding_time'] / output_trivlm['decoding_time'])
         # output_text = processor.batch_decode(output_trivlm['output_ids'], skip_special_tokens=True)[0]
         # print("Output:")
         # print(output_text)
         print("\n")
         results['TriVLM_decode'].append(output_trivlm['decoding_time'])
         results['TriVLM_accept_length'].append(output_trivlm["mean_accept_length"])
+
+        # results['speed_up_sd'].append((output_ar['decoding_time'])/output_sd['decoding_time'])
+        # results['speed_up_specvlm'].append((output_ar['decoding_time'])/output_specvlm['decoding_time'])
+        results['speed_up_trivlm'].append((output_ar['decoding_time'])/output_trivlm['decoding_time'])
         
-        print("Autoregressive Decoding Time:", (sum(results['Autoregressive_decoding'])/len(results['Autoregressive_decoding'])).item())
-        # print("SD Decoding Time:", sum(results['speculative_decoding'])/len(results['speculative_decoding']))
-        # print("SD Average Accept Length:", (sum(results['speculative_decoding_accept_length'])/len(results['speculative_decoding_accept_length'])).item())
-        # print("SpecVLM Decoding Time:", sum(results['specvlm_decode'])/len(results['specvlm_decode']))
-        # print("SpecVLM Average Accept Length:", (sum(results['specvlm_accept_length'])/len(results['specvlm_accept_length'])).item())
-        print("TriVLM Decoding Time:", sum(results['TriVLM_decode'])/len(results['TriVLM_decode']))
-        print("TriVLM Average Accept Length:", (sum(results['TriVLM_accept_length'])/len(results['TriVLM_accept_length'])).item())
+    print("Autoregressive Decoding Time:", (sum(results['Autoregressive_decoding'])/len(results['Autoregressive_decoding'])))
+
+    print("SD Decoding Time:", sum(results['speculative_decoding'])/len(results['speculative_decoding']))
+    print("SD Average Accept Length:", (sum(results['speculative_decoding_accept_length'])/len(results['speculative_decoding_accept_length'])).item())
+    print("Speed Up SD:", (sum(results['speed_up_sd'])/len(results['speed_up_sd'])))
+
+    print("SpecVLM Decoding Time:", sum(results['specvlm_decode'])/len(results['specvlm_decode']))
+    print("SpecVLM Average Accept Length:", (sum(results['specvlm_accept_length'])/len(results['specvlm_accept_length'])).item())
+    print("Speed Up SpecVLM:", (sum(results['speed_up_specvlm'])/len(results['speed_up_specvlm'])))
+    
+    print("TriVLM Decoding Time:", sum(results['TriVLM_decode'])/len(results['TriVLM_decode']))
+    print("TriVLM Average Accept Length:", (sum(results['TriVLM_accept_length'])/len(results['TriVLM_accept_length'])).item())
+    print("Speed Up TriVLM:", (sum(results['speed_up_trivlm'])/len(results['speed_up_trivlm']))) 
 
         # if save_path is not None: 
         #     print("\n")

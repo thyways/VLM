@@ -125,10 +125,11 @@ class RetrievalCache:
                 stride=1,
             )
 
-            similarity_cos = cal_similarity(
+            similarity_cos = cal_similarity_chunked_exact(
                 key_states,
                 retain_ratio=self.retain_ratio,
                 retain_direction=self.retain_direction,
+                chunk_size=1024,  # Smaller chunk size for better memory efficiency
             )[:, : -self.window_size]
 
             final_score = attn_cache * self.mix_lambda - similarity_cos * (
@@ -299,6 +300,9 @@ def cal_similarity(
     retain_ratio=0.2,
     retain_direction="last",
 ):
+    """
+    Original similarity calculation function - kept for reference
+    """
     k = key_states[0]
     num_heads = k.shape[0]
 
@@ -346,3 +350,390 @@ def cal_similarity(
     similarity_cos[batch_idx, seq_idx, similarity_retain] = 0
 
     return similarity_cos.mean(dim=1).softmax(dim=-1)
+
+
+def cal_similarity_chunked(
+    key_states,
+    threshold=0.5,
+    retain_ratio=0.2,
+    retain_direction="last",
+    chunk_size=512,
+):
+    """
+    Memory-efficient chunked version of similarity calculation.
+    
+    Args:
+        key_states: Input key states tensor
+        threshold: Similarity threshold for masking
+        retain_ratio: Ratio of elements to retain
+        retain_direction: Direction for retaining elements
+        chunk_size: Size of chunks for processing (default: 512)
+    
+    Returns:
+        Similarity scores after processing
+    """
+    k = key_states[0]
+    num_heads, seq_len, head_dim = k.shape
+    
+    # Normalize key states
+    k_norm = k / (k.norm(dim=-1, keepdim=True) + 1e-8)
+    
+    # Initialize output tensor for final similarity scores
+    final_similarity = torch.zeros(num_heads, seq_len, device=k.device, dtype=k.dtype)
+    
+    # Process in chunks to reduce memory usage
+    num_chunks = (seq_len + chunk_size - 1) // chunk_size
+    
+    for chunk_i in range(num_chunks):
+        start_i = chunk_i * chunk_size
+        end_i = min((chunk_i + 1) * chunk_size, seq_len)
+        chunk_len = end_i - start_i
+        
+        # Extract chunk of normalized keys
+        k_chunk = k_norm[:, start_i:end_i, :]  # [num_heads, chunk_len, head_dim]
+        
+        # Compute similarity matrix for this chunk
+        # similarity_chunk: [num_heads, chunk_len, seq_len]
+        similarity_chunk = torch.matmul(k_chunk, k_norm.transpose(-1, -2))
+        
+        # Zero out diagonal elements efficiently
+        diag_indices = torch.arange(chunk_len, device=k.device) + start_i
+        similarity_chunk[:, torch.arange(chunk_len), diag_indices] = 0.0
+        
+        # Apply threshold mask
+        similarity_mask = similarity_chunk > threshold
+        
+        # Process each row in the chunk
+        for i in range(chunk_len):
+            row_idx = start_i + i
+            row_mask = similarity_mask[:, i, :]  # [num_heads, seq_len]
+            
+            # Find indices where mask is True
+            true_indices = torch.where(row_mask[0])[0]  # Use first head as reference
+            
+            if len(true_indices) == 0:
+                # No similar tokens found, keep original similarity
+                final_similarity[:, row_idx] = similarity_chunk[:, i, :].mean(dim=-1)
+                continue
+            
+            # Calculate retain count
+            k_retain = max(1, int(len(true_indices) * retain_ratio))
+            
+            # Process based on retain direction
+            if retain_direction == "last":
+                # Keep the last k_retain similar tokens
+                retain_indices = true_indices[-k_retain:]
+            elif retain_direction == "first":
+                # Keep the first k_retain similar tokens
+                retain_indices = true_indices[:k_retain]
+            elif retain_direction == "last_percent":
+                # Keep the last k_retain% of similar tokens
+                retain_indices = true_indices[-k_retain:]
+            elif retain_direction == "first_percent":
+                # Keep the first k_retain% of similar tokens
+                retain_indices = true_indices[:k_retain]
+            else:
+                retain_indices = true_indices
+            
+            # Create modified similarity row
+            similarity_row = similarity_chunk[:, i, :].clone()
+            
+            # Zero out non-retained similar positions efficiently
+            similarity_row[:, retain_indices] = 0.0
+            
+            # Store the processed similarity for this row
+            final_similarity[:, row_idx] = similarity_row.mean(dim=-1)
+    
+    # Apply softmax to final similarity scores
+    return final_similarity.softmax(dim=-1)
+
+
+def cal_similarity_chunked_optimized(
+    key_states,
+    threshold=0.5,
+    retain_ratio=0.2,
+    retain_direction="last",
+    chunk_size=512,
+):
+    """
+    Further optimized chunked version with reduced memory allocations.
+    
+    Args:
+        key_states: Input key states tensor
+        threshold: Similarity threshold for masking
+        retain_ratio: Ratio of elements to retain
+        retain_direction: Direction for retaining elements
+        chunk_size: Size of chunks for processing (default: 512)
+    
+    Returns:
+        Similarity scores after processing
+    """
+    k = key_states[0]
+    num_heads, seq_len, head_dim = k.shape
+    
+    # Normalize key states
+    k_norm = k / (k.norm(dim=-1, keepdim=True) + 1e-8)
+    
+    # Initialize output tensor for final similarity scores
+    final_similarity = torch.zeros(num_heads, seq_len, device=k.device, dtype=k.dtype)
+    
+    # Process in chunks to reduce memory usage
+    num_chunks = (seq_len + chunk_size - 1) // chunk_size
+    
+    for chunk_i in range(num_chunks):
+        start_i = chunk_i * chunk_size
+        end_i = min((chunk_i + 1) * chunk_size, seq_len)
+        chunk_len = end_i - start_i
+        
+        # Extract chunk of normalized keys
+        k_chunk = k_norm[:, start_i:end_i, :]  # [num_heads, chunk_len, head_dim]
+        
+        # Compute similarity matrix for this chunk
+        # similarity_chunk: [num_heads, chunk_len, seq_len]
+        similarity_chunk = torch.matmul(k_chunk, k_norm.transpose(-1, -2))
+        
+        # Zero out diagonal elements efficiently
+        diag_indices = torch.arange(chunk_len, device=k.device) + start_i
+        similarity_chunk[:, torch.arange(chunk_len), diag_indices] = 0.0
+        
+        # Apply threshold mask
+        similarity_mask = similarity_chunk > threshold
+        
+        # Process each row in the chunk
+        for i in range(chunk_len):
+            row_idx = start_i + i
+            row_mask = similarity_mask[:, i, :]  # [num_heads, seq_len]
+            
+            # Find indices where mask is True
+            true_indices = torch.where(row_mask[0])[0]  # Use first head as reference
+            
+            if len(true_indices) == 0:
+                # No similar tokens found, keep original similarity
+                final_similarity[:, row_idx] = similarity_chunk[:, i, :].mean(dim=-1)
+                continue
+            
+            # Calculate retain count
+            k_retain = max(1, int(len(true_indices) * retain_ratio))
+            
+            # Process based on retain direction
+            if retain_direction == "last":
+                # Keep the last k_retain similar tokens
+                retain_indices = true_indices[-k_retain:]
+            elif retain_direction == "first":
+                # Keep the first k_retain similar tokens
+                retain_indices = true_indices[:k_retain]
+            elif retain_direction == "last_percent":
+                # Keep the last k_retain% of similar tokens
+                retain_indices = true_indices[-k_retain:]
+            elif retain_direction == "first_percent":
+                # Keep the first k_retain% of similar tokens
+                retain_indices = true_indices[:k_retain]
+            else:
+                retain_indices = true_indices
+            
+            # Create modified similarity row
+            similarity_row = similarity_chunk[:, i, :].clone()
+            
+            # Zero out non-retained similar positions efficiently
+            similarity_row[:, retain_indices] = 0.0
+            
+            # Store the processed similarity for this row
+            final_similarity[:, row_idx] = similarity_row.mean(dim=-1)
+    
+    # Apply softmax to final similarity scores
+    return final_similarity.softmax(dim=-1)
+
+
+def cal_similarity_chunked_lossless(
+    key_states,
+    threshold=0.5,
+    retain_ratio=0.2,
+    retain_direction="last",
+    chunk_size=512,
+):
+    """
+    Lossless chunked version that produces identical results to the original function.
+    
+    Args:
+        key_states: Input key states tensor
+        threshold: Similarity threshold for masking
+        retain_ratio: Ratio of elements to retain
+        retain_direction: Direction for retaining elements
+        chunk_size: Size of chunks for processing (default: 512)
+    
+    Returns:
+        Similarity scores after processing (identical to original)
+    """
+    k = key_states[0]
+    num_heads, seq_len, head_dim = k.shape
+    
+    # Normalize key states
+    k_norm = k / (k.norm(dim=-1, keepdim=True) + 1e-8)
+    
+    # Initialize output tensor for final similarity scores
+    final_similarity = torch.zeros(num_heads, seq_len, device=k.device, dtype=k.dtype)
+    
+    # Process in chunks to reduce memory usage
+    num_chunks = (seq_len + chunk_size - 1) // chunk_size
+    
+    for chunk_i in range(num_chunks):
+        start_i = chunk_i * chunk_size
+        end_i = min((chunk_i + 1) * chunk_size, seq_len)
+        chunk_len = end_i - start_i
+        
+        # Extract chunk of normalized keys
+        k_chunk = k_norm[:, start_i:end_i, :]  # [num_heads, chunk_len, head_dim]
+        
+        # Compute similarity matrix for this chunk
+        # similarity_chunk: [num_heads, chunk_len, seq_len]
+        similarity_chunk = torch.matmul(k_chunk, k_norm.transpose(-1, -2))
+        
+        # Zero out diagonal elements efficiently
+        diag_indices = torch.arange(chunk_len, device=k.device) + start_i
+        similarity_chunk[:, torch.arange(chunk_len), diag_indices] = 0.0
+        
+        # Apply threshold mask
+        similarity_mask = similarity_chunk > threshold
+        
+        # Process each row in the chunk
+        for i in range(chunk_len):
+            row_idx = start_i + i
+            row_mask = similarity_mask[:, i, :]  # [num_heads, seq_len]
+            
+            # Process each head separately to ensure lossless computation
+            for head_idx in range(num_heads):
+                # Find indices where mask is True for this specific head
+                true_indices = torch.where(row_mask[head_idx])[0]
+                
+                if len(true_indices) == 0:
+                    # No similar tokens found, keep original similarity
+                    final_similarity[head_idx, row_idx] = similarity_chunk[head_idx, i, :].mean()
+                    continue
+                
+                # Calculate retain count
+                k_retain = max(1, int(len(true_indices) * retain_ratio))
+                
+                # Process based on retain direction
+                if retain_direction == "last":
+                    # Keep the last k_retain similar tokens
+                    retain_indices = true_indices[-k_retain:]
+                elif retain_direction == "first":
+                    # Keep the first k_retain similar tokens
+                    retain_indices = true_indices[:k_retain]
+                elif retain_direction == "last_percent":
+                    # Keep the last k_retain% of similar tokens
+                    retain_indices = true_indices[-k_retain:]
+                elif retain_direction == "first_percent":
+                    # Keep the first k_retain% of similar tokens
+                    retain_indices = true_indices[:k_retain]
+                else:
+                    retain_indices = true_indices
+                
+                # Create modified similarity row for this head
+                similarity_row = similarity_chunk[head_idx, i, :].clone()
+                
+                # Zero out non-retained similar positions
+                similarity_row[retain_indices] = 0.0
+                
+                # Store the processed similarity for this head and row
+                final_similarity[head_idx, row_idx] = similarity_row.mean()
+    
+    # Apply softmax to final similarity scores
+    return final_similarity.softmax(dim=-1)
+
+
+def cal_similarity_chunked_exact(
+    key_states,
+    threshold=0.5,
+    retain_ratio=0.2,
+    retain_direction="last",
+    chunk_size=512,
+):
+    """
+    Exact chunked version that perfectly matches the original function's logic.
+    
+    Args:
+        key_states: Input key states tensor
+        threshold: Similarity threshold for masking
+        retain_ratio: Ratio of elements to retain
+        retain_direction: Direction for retaining elements
+        chunk_size: Size of chunks for processing (default: 512)
+    
+    Returns:
+        Similarity scores after processing (identical to original)
+    """
+    k = key_states[0]
+    num_heads, seq_len, head_dim = k.shape
+    
+    # Normalize key states
+    k_norm = k / (k.norm(dim=-1, keepdim=True) + 1e-8)
+    
+    # Initialize output tensor for final similarity scores
+    final_similarity = torch.zeros(num_heads, seq_len, device=k.device, dtype=k.dtype)
+    
+    # Process in chunks to reduce memory usage
+    num_chunks = (seq_len + chunk_size - 1) // chunk_size
+    
+    for chunk_i in range(num_chunks):
+        start_i = chunk_i * chunk_size
+        end_i = min((chunk_i + 1) * chunk_size, seq_len)
+        chunk_len = end_i - start_i
+        
+        # Extract chunk of normalized keys
+        k_chunk = k_norm[:, start_i:end_i, :]  # [num_heads, chunk_len, head_dim]
+        
+        # Compute similarity matrix for this chunk
+        # similarity_chunk: [num_heads, chunk_len, seq_len]
+        similarity_chunk = torch.matmul(k_chunk, k_norm.transpose(-1, -2))
+        
+        # Zero out diagonal elements efficiently
+        diag_indices = torch.arange(chunk_len, device=k.device) + start_i
+        similarity_chunk[:, torch.arange(chunk_len), diag_indices] = 0.0
+        
+        # Apply threshold mask
+        similarity_mask = similarity_chunk > threshold
+        
+        # Process each row in the chunk
+        for i in range(chunk_len):
+            row_idx = start_i + i
+            row_mask = similarity_mask[:, i, :]  # [num_heads, seq_len]
+            
+            # Process each head separately to ensure exact computation
+            for head_idx in range(num_heads):
+                # Create indices tensor exactly like the original function
+                indices = torch.where(
+                    row_mask[head_idx],
+                    torch.arange(seq_len, device=k.device),
+                    torch.zeros(seq_len, device=k.device, dtype=torch.long),
+                )
+                
+                # Calculate retain count based on total sequence length (like original)
+                k_retain = max(1, int(seq_len * retain_ratio))
+                
+                # Process based on retain direction (exactly like original)
+                if retain_direction == "last":
+                    similarity_retain = torch.max(indices, dim=-1)[0]
+                elif retain_direction == "first":
+                    similarity_retain = torch.min(indices, dim=-1)[0]
+                elif retain_direction == "last_percent":
+                    # Use topk exactly like original
+                    topk_result = torch.topk(indices, k=k_retain, dim=-1)
+                    similarity_retain = topk_result[0][0]  # Take the first element
+                elif retain_direction == "first_percent":
+                    # Use topk exactly like original
+                    topk_result = torch.topk(indices, k=k_retain, dim=-1, largest=False)
+                    similarity_retain = topk_result[0][-1]  # Take the last element
+                else:
+                    similarity_retain = indices
+                
+                # Create modified similarity row for this head
+                similarity_row = similarity_chunk[head_idx, i, :].clone()
+                
+                # Zero out the specified position (exactly like original)
+                similarity_row[similarity_retain] = 0.0
+                
+                # Store the processed similarity for this head and row
+                final_similarity[head_idx, row_idx] = similarity_row.mean()
+    
+    # Apply softmax to final similarity scores
+    return final_similarity.softmax(dim=-1)

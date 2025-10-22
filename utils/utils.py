@@ -169,7 +169,8 @@ def decode_video(processor, task, data_instance, frame_num=8, model_type='qwen2_
                     {
                         "type": "video",
                         "video": f"file://{video_path}",
-                        "max_pixels": 448*448,  
+                        "max_pixels": 448*448,
+                        "min_pixels": 448*448,  
                         "fps": fps, 
                     },
                     {"type": "text", "text": question},
