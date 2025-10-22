@@ -80,22 +80,6 @@ class FullCache:
         
         self.prompt_length = prompt_length
     
-    def update(
-        self,
-        key_states: torch.Tensor,
-        value_states: torch.Tensor,
-        layer_idx: int,
-        cache_kwargs: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        if not self.prompt_length:
-            return super().update(key_states, value_states, layer_idx, cache_kwargs)
-        else:
-            query_states = cache_kwargs["query_states"] # (bz, num_heads, Q, head_dim)
-            query_states = query_states[:, :, -self.prompt_length:, :]
-            key_states = key_states[:, :, :-self.prompt_length, :]
-            value_states = value_states[:, :, :-self.prompt_length, :]
-            super_result = super().update(key_states, value_states, layer_idx, cache_kwargs)
-            return super_result
 
 
 def initialize_past_key_values(model):

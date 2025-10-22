@@ -207,7 +207,7 @@ def decode_video(processor, task, data_instance, frame_num=8, model_type='qwen2_
     print("INFO: Input length:", inputs['input_ids'].shape[1])
     return inputs, video_inputs
 
-def video_chunk_prefill(whole_inputs, video_inputs, model, processor, kvcache, retrieval_kvcache, video_group_size=8, output_attentions=False, sparse_cache=False):
+def video_chunk_prefill(whole_inputs, video_inputs, model, processor, kvcache, video_group_size=8, output_attentions=False, sparse_cache=False):
     whole_inputs = whole_inputs.to(model.device)
     n_video_tokens = (whole_inputs['input_ids'] == model.config.video_token_id).sum().item()
     video_token_idxs = (whole_inputs['input_ids'] == model.config.video_token_id).nonzero(as_tuple=True)[1]
@@ -223,7 +223,7 @@ def video_chunk_prefill(whole_inputs, video_inputs, model, processor, kvcache, r
     model.rope_deltas = rope_deltas
     
     video_group_size = video_group_size
-    temporal_patch_size = temporal_patch_size = processor.image_processor.temporal_patch_size
+    temporal_patch_size =  processor.image_processor.temporal_patch_size
 
     if not video_group_size % temporal_patch_size == 0:
         video_group_size += temporal_patch_size - (video_group_size % temporal_patch_size)
@@ -251,7 +251,6 @@ def video_chunk_prefill(whole_inputs, video_inputs, model, processor, kvcache, r
     
     # preprepare the chunk processing
     past_key_values = kvcache
-    retrieval_past_key_values = retrieval_kvcache
     past_len = 0
     video_token_idxs = (whole_inputs['input_ids'] == model.config.video_token_id).nonzero(as_tuple=True)[1]
     first_video_token_id_idx = video_token_idxs[0].item()
@@ -259,14 +258,16 @@ def video_chunk_prefill(whole_inputs, video_inputs, model, processor, kvcache, r
     prompt_input_ids = whole_inputs['input_ids'][:, last_video_token_id_idx + 1:]
     prompt_attention_mask = whole_inputs['attention_mask'][:, last_video_token_id_idx + 1:]
 
-    past_key_values[0].set_prompt_length(prompt_input_ids.shape[1])
+    for i, layer_cache in enumerate(past_key_values):
+        for j, cache in enumerate(layer_cache):
+            cache.set_prompt_length(prompt_input_ids.shape[1])
     video_groups_tokens[0] += first_video_token_id_idx
     
     print(f"Processing total of {len(video_groups)} video groups, each with {video_group_size} frames.")
          # set the prompt length for the cache
     # start processing the video groups
     for i, pixel_values_videos_groups_i in tqdm(enumerate(pixel_values_videos_groups),
-        desc="Processing video groups", total=len(pixel_values_videos_groups), disable= False): 
+        desc="Processing video groups", total=len(pixel_values_videos_groups), disable= True): 
         
         group_i_inputs = {
             "video_grid_thw": video_groups_grid_thw[i],
@@ -275,7 +276,7 @@ def video_chunk_prefill(whole_inputs, video_inputs, model, processor, kvcache, r
         }
         group_i_inputs = BatchFeature(data=group_i_inputs)
         group_i_inputs['input_ids'] = whole_inputs['input_ids'][:, past_len:past_len + video_groups_tokens[i]]
-        group_i_inputs['attention_mask'] = whole_inputs['attention_mask'][:, past_len:past_len + video_groups_tokens[i]]
+        group_i_inputs['attention_mask'] = whole_inputs['attention_mask'][:, :past_len + video_groups_tokens[i]]
 
         group_i_inputs['input_ids'] = torch.cat((group_i_inputs['input_ids'], prompt_input_ids), dim=1)
         group_i_inputs['attention_mask'] = torch.cat((group_i_inputs['attention_mask'], prompt_attention_mask), dim=1)
@@ -289,12 +290,14 @@ def video_chunk_prefill(whole_inputs, video_inputs, model, processor, kvcache, r
 
         with torch.no_grad():
             outputs = model(**group_i_inputs,)
-            past_key_values = outputs.past_key_values
+
     assert past_len < whole_inputs['input_ids'].shape[1], "The past length should be less than the final input length."   
-    past_key_values.set_prompt_length(0)
+    for i, layer_cache in enumerate(past_key_values):
+        for j, cache in enumerate(layer_cache):
+            cache.set_prompt_length(0)
     final_inputs = {
         "input_ids": whole_inputs['input_ids'][:, past_len:],
-        "attention_mask": whole_inputs['attention_mask'][:, past_len:],
+        "attention_mask": whole_inputs['attention_mask'],
     }
     final_inputs = BatchFeature(data=final_inputs)
     final_inputs['cache_position'] = torch.arange(final_inputs.input_ids.shape[1], dtype=torch.int64, device=model.device) + past_len
@@ -303,7 +306,6 @@ def video_chunk_prefill(whole_inputs, video_inputs, model, processor, kvcache, r
         final_inputs['input_ids'].shape[1], final_inputs['position_ids'].shape[2])
     final_inputs = final_inputs.to(model.device)
     final_inputs['past_key_values'] = past_key_values
-    final_inputs['retrieval_past_key_values'] = retrieval_past_key_values
     final_inputs['use_cache'] = True
     
     output = model( **final_inputs, output_attentions=output_attentions, sparse_cache=sparse_cache)

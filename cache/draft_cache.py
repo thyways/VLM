@@ -32,6 +32,8 @@ class DraftCache:
         self.data = data
         self.current_length = current_length
 
+        self.prompt_length = 0
+
         # for recording kept token indices
         self.record_kept_token_indices = record_kept_token_indices
         if self.record_kept_token_indices:
@@ -139,6 +141,10 @@ class DraftCache:
             value_states = torch.cat([v_past_compress, v_cur], dim=2)
 
             return key_states, value_states
+
+    def set_prompt_length(self, prompt_length: int=0):
+        
+        self.prompt_length = prompt_length
 
 def initialize_past_key_values_draft(model):
     """

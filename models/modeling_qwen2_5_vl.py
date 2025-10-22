@@ -1027,6 +1027,12 @@ class Qwen2_5_VLSdpaAttention(Qwen2_5_VLAttention):
         query_states, key_states = apply_multimodal_rotary_pos_emb(
             query_states, key_states, cos, sin, self.rope_scaling["mrope_section"]
         )
+
+        promote_lenth = past_key_value[0].prompt_length
+        if promote_lenth != 0:
+            key_states = key_states[:, :, :-promote_lenth, :]
+            value_states = value_states[:, :, :-promote_lenth, :]
+
         if past_key_value is not None:
             key_states = past_key_value[0].cat(key_states, dim=2)
             value_states = past_key_value[1].cat(value_states, dim=2)
@@ -1367,9 +1373,8 @@ class Qwen2_5_VLModel(Qwen2_5_VLPreTrainedModel):
                 )
 
             hidden_states = layer_outputs[0]
-
             if use_cache:
-                next_decoder_cache = layer_outputs[1 if output_attentions else 0]
+                next_decoder_cache = (layer_outputs[2 if output_attentions else 1])
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)

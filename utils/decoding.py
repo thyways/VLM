@@ -17,10 +17,10 @@ from utils.choices import mc_sim_7b_63
 from utils.utils import *
 
 TOPK = 10
-video_group_size = 4
+video_group_size = 32
 
 @torch.no_grad()
-def Autoregressive(inputs, video_inputs, target_model, max_new_tokens=128, top_k=-1, top_p=0.9, temperature=0.6):
+def Autoregressive(inputs, video_inputs, target_model, processor, max_new_tokens=128, top_k=-1, top_p=0.9, temperature=0.6):
     torch.cuda.synchronize()
     time1 = time.time()
 
@@ -39,7 +39,7 @@ def Autoregressive(inputs, video_inputs, target_model, max_new_tokens=128, top_k
     batch_size = input_ids.shape[0]
     
     with torch.no_grad():
-        output = video_chunk_prefill(inputs, video_inputs, target_model, past_key_values, video_group_size, sparse_cache = True)
+        output = video_chunk_prefill(inputs, video_inputs, target_model, processor, past_key_values, video_group_size, sparse_cache = True)
         logits = output.logits
         #attentions = output.attentions
         if temperature==0:
@@ -273,7 +273,7 @@ def SD_generate_with_pruning(
 
         scores = None
         sample_token, input_ids, draft_input_len, scores = initialize_tree_with_pruning(
-            inputs, video_inputs, model, draft_model, past_key_values, draft_past_key_values,
+            inputs, video_inputs, model, draft_model, processor, past_key_values, draft_past_key_values,
             method, video_token_id, drop_rate, idx=idx, inputs_drop=inputs_drop,
             threshold=threshold, percentage=percentage,similarity_threshold=similarity_threshold,
         )
@@ -408,12 +408,12 @@ def sparse_speculative_decoding_TriVLM(
         target_model.model.past_key_values_data = past_key_values_data
         target_model.model.current_length_data = current_length_data
 
-        # (
-        #         retrieval_past_key_values,
-        #         retrieval_past_key_values_data,
-        #         retrieval_current_length_data,
-        # ) = initialize_past_key_values_retrieval(target_model)
-        retrieval_past_key_values = None
+        (
+                retrieval_past_key_values,
+                retrieval_past_key_values_data,
+                retrieval_current_length_data,
+        ) = initialize_past_key_values(draft_model)
+
 
         (
                 draft_past_key_values,
@@ -428,7 +428,7 @@ def sparse_speculative_decoding_TriVLM(
 
         scores = None
         sample_token, draft_input_len,= initialize_tree_with_TriVLM(
-            inputs, video_inputs, target_model, draft_model, past_key_values, retrieval_past_key_values, draft_past_key_values,
+            inputs, video_inputs, target_model, draft_model, processor, past_key_values, retrieval_past_key_values, draft_past_key_values,
             temperature=temperature, top_k=top_k, top_p=top_p 
         )
 
@@ -709,10 +709,10 @@ def initialize_tree(inputs,video_inputs, target_model, draft_model, processor, p
         sample_token = sample_token[None, None]
     else:
         sample_token = sample(norm_logits(logits[:,-1,:], temperature=temperature ,top_k=top_k, top_p=top_p))
-    output_draft = video_chunk_prefill(inputs, video_inputs, draft_model, draft_past_key_values, video_group_size, sparse_cache=True)
+    output_draft = video_chunk_prefill(inputs, video_inputs, draft_model, processor, draft_past_key_values, video_group_size, sparse_cache=True)
     return sample_token
 
-def initialize_tree_with_pruning(inputs, video_inputs, model, draft_model, past_key_values, draft_past_key_values,
+def initialize_tree_with_pruning(inputs, video_inputs, model, draft_model, processor, past_key_values, draft_past_key_values,
                               method=None, video_token_id=151656, drop_rate=None, idx=None, inputs_drop=None, threshold=None, percentage=None, similarity_threshold=0.95):
     # #Find the last video_token
     # last_video_idx = get_last_video_idx(inputs['input_ids'][0], video_token_id)
@@ -734,7 +734,7 @@ def initialize_tree_with_pruning(inputs, video_inputs, model, draft_model, past_
     #     past_key_values=past_key_values, 
     #     output_attentions=True,
     # )
-    output = video_chunk_prefill(inputs, video_inputs, model, past_key_values, video_group_size,output_attentions=True)
+    output = video_chunk_prefill(inputs, video_inputs, model, processor, past_key_values, video_group_size,output_attentions=True)
     logits = output.logits
     attentions = output.attentions
     # text_emb = output2.output_embeddings
@@ -763,10 +763,12 @@ def initialize_tree_with_pruning(inputs, video_inputs, model, draft_model, past_
 
     return sample_token, input_ids, draft_input_len, scores
 
-def initialize_tree_with_TriVLM(inputs, video_inputs, target_model, draft_model, past_key_values,
+def initialize_tree_with_TriVLM(inputs, video_inputs, target_model, draft_model, processor, past_key_values,
                                 retrieval_past_key_values, draft_past_key_values,
                                 temperature=0.6, top_k=-1, top_p=0.9):
-    output = video_chunk_prefill(inputs, video_inputs, target_model, past_key_values, video_group_size,)
+    _ = video_chunk_prefill(inputs, video_inputs, draft_model, processor, draft_past_key_values,  video_group_size, sparse_cache=True)
+    draft_input_len = draft_past_key_values[0][0].shape[2]
+    output = video_chunk_prefill(inputs, video_inputs, target_model, processor, past_key_values, video_group_size,)
     logits = output.logits
     if temperature==0:
         sample_token = torch.argmax(logits[:, -1])
@@ -775,8 +777,6 @@ def initialize_tree_with_TriVLM(inputs, video_inputs, target_model, draft_model,
         sample_token = sample(norm_logits(logits[:,-1,:], temperature=temperature ,top_k=top_k, top_p=top_p))
 
     #Prefill of Draft Model
-    output_draft = video_chunk_prefill(inputs, video_inputs, draft_model, draft_past_key_values, video_group_size, sparse_cache=True)
-    draft_input_len = draft_past_key_values[0][0].shape[2]
 
     return sample_token, draft_input_len,
 
@@ -1016,6 +1016,8 @@ def _cleanup_model_inference_cache(*models):
         module = getattr(model, "model", None)
         if module is None:
             continue
+        
+        # Clean up past key values
         past_key_values = getattr(module, "past_key_values", None)
         if isinstance(past_key_values, (list, tuple)):
             for layer_cache in past_key_values:
@@ -1025,23 +1027,46 @@ def _cleanup_model_inference_cache(*models):
                             cache.data = None
                         if hasattr(cache, "current_length"):
                             cache.current_length = None
+        
+        # Clean up main model cache attributes
         if hasattr(module, "past_key_values"):
             module.past_key_values = None
         if hasattr(module, "past_key_values_data"):
             module.past_key_values_data = None
         if hasattr(module, "current_length_data"):
             module.current_length_data = None
+            
+        # Clean up draft model cache attributes (fixed the bugs here)
+        if hasattr(module, "draft_past_key_values"):
+            module.draft_past_key_values = None
+        if hasattr(module, "draft_past_key_values_data"):
+            module.draft_past_key_values_data = None
+        if hasattr(module, "draft_current_length_data"):
+            module.draft_current_length_data = None
+            
+        # Clean up rope and tree-related attributes
         if hasattr(module, "rope_deltas"):
             module.rope_deltas = None
         if hasattr(module, "tree_mask"):
             module.tree_mask = None
         if hasattr(module, "tree_mode"):
             module.tree_mode = None
+            
+        # Clean up model-level tree attributes
         if hasattr(model, "tree_buffers"):
             model.tree_buffers = None
         if hasattr(model, "tree_choices"):
             model.tree_choices = None
         if hasattr(model, "tree_buffer"):
             model.tree_buffer = None
+            
+        # Additional cleanup for any remaining cache states
+        if hasattr(module, "retrieval_past_key_values"):
+            module.retrieval_past_key_values = None
+        if hasattr(module, "retrieval_past_key_values_data"):
+            module.retrieval_past_key_values_data = None
+        if hasattr(module, "retrieval_current_length_data"):
+            module.retrieval_current_length_data = None
+            
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
